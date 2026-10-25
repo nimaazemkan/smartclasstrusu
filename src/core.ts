@@ -299,6 +299,16 @@ async function ensureExtraTables(db: D1Database) {
         created_at TEXT NOT NULL
       )`
     ),
+    db.prepare(
+      `CREATE TABLE IF NOT EXISTS submission_media (
+        item_type TEXT NOT NULL,
+        item_id INTEGER NOT NULL,
+        content_text TEXT DEFAULT '',
+        tg_file_id TEXT DEFAULT '',
+        media_kind TEXT DEFAULT '',
+        PRIMARY KEY (item_type, item_id)
+      )`
+    ),
   ]);
 
   // بارگذاری جوایز پیش‌فرض فروشگاه در اولین اجرا
@@ -319,6 +329,39 @@ async function ensureExtraTables(db: D1Database) {
 }
 
 // ---- فروشگاه جوایز ----
+async function saveSubmissionMedia(
+  db: D1Database,
+  itemType: "hw" | "lab",
+  itemId: number,
+  contentText: string,
+  tgFileId: string,
+  mediaKind: string
+) {
+  try {
+    await ensureExtraTables(db);
+    await db
+      .prepare(
+        "INSERT OR REPLACE INTO submission_media (item_type, item_id, content_text, tg_file_id, media_kind) VALUES (?, ?, ?, ?, ?)"
+      )
+      .bind(itemType, itemId, (contentText || "").slice(0, 4000), tgFileId || "", mediaKind || "")
+      .run();
+  } catch (e) {
+    console.error("saveSubmissionMedia error:", e);
+  }
+}
+
+function extractTelegramMediaInfo(msg: any): { tgFileId: string; mediaKind: string; text: string } {
+  const text = String(msg?.text || msg?.caption || "");
+  if (msg?.photo && msg.photo.length > 0) {
+    return { tgFileId: msg.photo[msg.photo.length - 1].file_id, mediaKind: "photo", text };
+  }
+  if (msg?.voice?.file_id) return { tgFileId: msg.voice.file_id, mediaKind: "voice", text };
+  if (msg?.audio?.file_id) return { tgFileId: msg.audio.file_id, mediaKind: "audio", text };
+  if (msg?.video?.file_id) return { tgFileId: msg.video.file_id, mediaKind: "video", text };
+  if (msg?.video_note?.file_id) return { tgFileId: msg.video_note.file_id, mediaKind: "video", text };
+  if (msg?.document?.file_id) return { tgFileId: msg.document.file_id, mediaKind: "document", text };
+  return { tgFileId: "", mediaKind: text ? "text" : "", text };
+}
 interface ShopItem { id: number; title: string; cost: number; description: string; active: number; }
 interface ShopOrder { id: number; user_id: number; student_name: string; item_id: number; item_title: string; cost: number; status: string; created_at: string; }
 
@@ -4366,6 +4409,8 @@ async function submitLabProofToTeacher(
   }
 
   const subId = await createLabSubmission(env.telegram_bot_db, userId, student.name, waitState);
+  const labMedia = extractTelegramMediaInfo(ctx.message);
+  await saveSubmissionMedia(env.telegram_bot_db, "lab", subId, labMedia.text, labMedia.tgFileId, labMedia.mediaKind);
   await ctx.forwardMessage(TEACHER_ID);
 
   const kb = new InlineKeyboard()
@@ -7708,6 +7753,7 @@ function createBot(env: Env) {
     if (!student) return void (await ctx.reply("اول /start بزن."));
 
     const hwId = await addHomework(env.telegram_bot_db, userId, student.name, "✍️ متن");
+    await saveSubmissionMedia(env.telegram_bot_db, "hw", hwId, ctx.message.text, "", "text");
     await ctx.forwardMessage(TEACHER_ID);
     const streakResult = await updateStreak(env.telegram_bot_db, userId);
     const inlineKb = new InlineKeyboard().text("✅ تایید", `approve_${hwId}`).text("❌ رد", `reject_${hwId}`).row().text("⭐ +1", `quick_${hwId}_1`).text("⭐ +3", `quick_${hwId}_3`).text("⭐ +5", `quick_${hwId}_5`);
@@ -8202,6 +8248,8 @@ function createBot(env: Env) {
     let type = "📄 فایل";
     if (ctx.message.photo) type = "📷 عکس"; else if (ctx.message.video) type = "🎥 ویدیو"; else if (ctx.message.voice) type = "🎤 ویس"; else if (ctx.message.video_note) type = "📹 ویدیو مسیج"; else if (ctx.message.document) type = "📄 فایل"; else if (ctx.message.audio) type = "🎵 صوتی";
     const hwId = await addHomework(env.telegram_bot_db, userId, student.name, type);
+    const hwMedia = extractTelegramMediaInfo(ctx.message);
+    await saveSubmissionMedia(env.telegram_bot_db, "hw", hwId, hwMedia.text, hwMedia.tgFileId, hwMedia.mediaKind);
     await ctx.forwardMessage(TEACHER_ID);
     const streakResult = await updateStreak(env.telegram_bot_db, userId);
     const inlineKb = new InlineKeyboard().text("✅ تایید", `approve_${hwId}`).text("❌ رد", `reject_${hwId}`).row().text("⭐ +1", `quick_${hwId}_1`).text("⭐ +3", `quick_${hwId}_3`).text("⭐ +5", `quick_${hwId}_5`);
@@ -8296,7 +8344,7 @@ function buildAppHtml(defaultApiBase: string = ""): string {
 <html lang="fa" dir="rtl">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=4.0, user-scalable=yes, viewport-fit=cover" />
   <meta name="theme-color" content="#0F172A" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
@@ -8538,8 +8586,8 @@ function buildAppHtml(defaultApiBase: string = ""): string {
   <div class="modal-backdrop" id="serverModal">
     <div class="modal-card">
       <div class="section-title">⚙️ آدرس سرور کلاس هوشمند</div>
-      <p class="muted">اپلیکیشن به صورت پیش‌فرض به سرور کلودفلر کلاس متصل است. فقط در صورت تغییر دامنه آن را ویرایش کنید:</p>
-      <input id="serverUrlInput" class="input" dir="ltr" placeholder="https://my-telegram-bot.nimaazemkan.workers.dev" />
+      <p class="muted">اپلیکیشن به صورت پیش‌فرض به سرور بدون فیلتر کلاس متصل است. فقط در صورت تغییر سرور آن را ویرایش کنید:</p>
+      <input id="serverUrlInput" class="input" dir="ltr" placeholder="https://smartclasstrusu.onrender.com" />
       <div class="grid-2">
         <button class="btn" onclick="saveServerUrl()">ذخیره</button>
         <button class="btn btn-ghost" onclick="closeServerModal()">بستن</button>
@@ -8547,12 +8595,28 @@ function buildAppHtml(defaultApiBase: string = ""): string {
     </div>
   </div>
 
+  <!-- مودال مشاهده و تصحیح تکلیف دانش‌آموز -->
+  <div class="modal-backdrop" id="hwModal">
+    <div class="modal-card" id="hwModalBody" style="max-width:500px;max-height:88vh;overflow-y:auto;"></div>
+  </div>
+
   <script>
     const BUILTIN_API_BASE = ${JSON.stringify(defaultApiBase)};
+    function stripTrailingSlash(s) {
+      let out = String(s || "").trim();
+      while (out.endsWith("/")) out = out.slice(0, -1);
+      return out;
+    }
     function getApiBase() {
-      const saved = localStorage.getItem("sc_api_base");
-      if (saved !== null && saved.trim() !== "") return saved.replace(/\\/+$/, "");
-      if (BUILTIN_API_BASE) return BUILTIN_API_BASE.replace(/\\/+$/, "");
+      const saved = (localStorage.getItem("sc_api_base") || "").trim();
+      const lower = saved.toLowerCase();
+      if (saved && (lower.startsWith("https://") || lower.startsWith("http://")) && !lower.includes("workers.dev")) {
+        return stripTrailingSlash(saved);
+      }
+      if (saved && lower.includes("workers.dev")) {
+        try { localStorage.removeItem("sc_api_base"); } catch {}
+      }
+      if (BUILTIN_API_BASE) return stripTrailingSlash(BUILTIN_API_BASE);
       return "";
     }
 
@@ -8567,6 +8631,15 @@ function buildAppHtml(defaultApiBase: string = ""): string {
     let engHistory = [];
     let sciHistory = [];
     let activeSciKey = "avicenna";
+    let hwFilterMode = "all"; // all | ungraded | graded
+    window._teacherRecentHw = [];
+
+    function buildMediaUrl(fid) {
+      if (!fid) return "";
+      const base = getApiBase();
+      const tok = encodeURIComponent(session?.token || "");
+      return base + "/api/app/media?fid=" + encodeURIComponent(fid) + "&t=" + tok;
+    }
     let leitnerDeck = [];
     let leitnerIdx = 0;
     let leitnerFlipped = false;
@@ -8588,11 +8661,14 @@ function buildAppHtml(defaultApiBase: string = ""): string {
       document.getElementById("serverModal").style.display = "none";
     }
     function cleanServerInputUrl(raw) {
-      let v = String(raw || "").trim();
+      let v = stripTrailingSlash(raw);
       if (!v) return "";
-      if (!/^https?:\/\//i.test(v)) v = "https://" + v;
-      v = v.replace(/\/app\/?$/i, "").replace(/\/setup\/?$/i, "").replace(/\/+$/, "");
-      return v;
+      if (!v.toLowerCase().startsWith("http://") && !v.toLowerCase().startsWith("https://")) {
+        v = "https://" + v;
+      }
+      if (v.toLowerCase().endsWith("/app")) v = v.slice(0, -4);
+      if (v.toLowerCase().endsWith("/setup")) v = v.slice(0, -6);
+      return stripTrailingSlash(v);
     }
     function saveServerUrl() {
       const v = cleanServerInputUrl(document.getElementById("serverUrlInput").value);
@@ -8713,7 +8789,7 @@ function buildAppHtml(defaultApiBase: string = ""): string {
           totalStudents: my.totalStudents || 1,
           weeklyStudyMin: 0,
           badges: (my.badges || []).map(b => ({ badge: b.name || b.badge, date: b.date })),
-          mission: { id: 0, mission: "برای فعال شدن ماموریت و کارگاه هوشمند، نسخه جدید ربات را در کلودفلر دیپلوی کنید.", done: 0 },
+          mission: { id: 0, mission: "برای فعال شدن ماموریت و کارگاه هوشمند، نسخه جدید سرور کلاس را به‌روزرسانی کنید.", done: 0 },
           deadlines: ((dashRes.data && dashRes.data.deadlines) || []).map(d => ({ id: d.id, title: d.title, due_date: d.dueDate || d.due_date || "" })),
           credentials: deriveCodesForUser(session.userId),
           legacyNotice: true
@@ -8770,9 +8846,9 @@ function buildAppHtml(defaultApiBase: string = ""): string {
       if (path === "/api/app/library") return { items: [] };
       if (path === "/api/app/leitner") return { stats: { total: 0, due: 0, mastered: 0 }, dueCards: [] };
       if (path === "/api/app/planner" && (!method || method === "GET")) return { plan: "" };
-      if (path === "/api/app/dictation") return { title: "دیکته کلاسی", text: "لطفاً نسخه جدید ربات را در کلودفلر دیپلوی کنید." };
+      if (path === "/api/app/dictation") return { title: "دیکته کلاسی", text: "لطفاً نسخه جدید سرور کلاس هوشمند را به‌روزرسانی کنید." };
 
-      throw new Error("برای استفاده از این بخش، ابتدا کد جدید ربات (فایل worker.js یا my-telegram-bot-updated.zip) را در کلودفلر دیپلوی کنید.");
+      throw new Error("نسخه سرور کلاس نیاز به به‌روزرسانی دارد.");
     }
 
     async function api(path, body = null, method = null) {
@@ -8786,36 +8862,96 @@ function buildAppHtml(defaultApiBase: string = ""): string {
       let parsed;
       try {
         parsed = await fetchJsonSafe(url, opts);
-      } catch {
-        throw new Error("عدم دسترسی به اینترنت یا سرور کلودفلر (در صورت نیاز آدرس سرور یا فیلترشکن را بررسی کنید)");
+      } catch (firstErr) {
+        // تلاش مجدد خودکار (مفید برای زمان بیدار شدن سرور رایگان Render یا قطع لحظه‌ای آنتن موبایل)
+        try {
+          showToast("⏳ در حال اتصال به سرور کلاس هوشمند...");
+          if (base) {
+            await fetch(base + "/health", { method: "GET", cache: "no-store" }).catch(() => {});
+          }
+          await new Promise(r => setTimeout(r, 1800));
+          parsed = await fetchJsonSafe(url, opts);
+        } catch {
+          throw new Error("اختلال در اینترنت موبایل یا سرور کلاس — لطفاً اتصال اینترنت را بررسی کرده و دوباره تلاش کنید.");
+        }
       }
 
-      // اگر نسخه جدید ورکر هنوز روی کلودفلر دیپلوی نشده باشد (404 Not Found)، خودکار به پل سازگاری برو!
       if (parsed.res.status === 404 && path.startsWith("/api/app/")) {
         return await legacyApiFallback(base, path, body, opts.method);
       }
 
       window._usingLegacyWorker = false;
       if (!parsed.data) {
-        throw new Error("پاسخ نامعتبر از سرور (" + parsed.res.status + ") — لطفاً نسخه جدید ربات را در کلودفلر دیپلوی کنید.");
+        throw new Error("پاسخ موقت نامعتبر از سرور (" + parsed.res.status + ") — لطفاً چند ثانیه بعد دوباره امتحان کنید.");
       }
       if (!parsed.res.ok || parsed.data.error) {
         if (parsed.res.status === 401 && String(session?.token || "").startsWith("legacy-")) {
-          // به محض دیپلوی شدن ورکر جدید، کاربر را به صفحه ورود هدایت کن تا توکن اصلی بگیرد
           doLogout();
-          throw new Error("سرور کلودفلر به‌روزرسانی شد! لطفاً یک بار دیگر وارد شوید.");
+          throw new Error("سرور کلاس به‌روزرسانی شد! لطفاً یک بار دیگر وارد شوید.");
         }
         throw new Error(parsed.data.error || ("خطای ارتباط (" + parsed.res.status + ")"));
       }
       return parsed.data;
     }
 
-    function fileToBase64(file) {
+    function readRawDataUrl(file) {
       return new Promise((resolve, reject) => {
         const reader = new FileReader();
         reader.onload = () => resolve(String(reader.result));
-        reader.onerror = reject;
+        reader.onerror = () => reject(new Error("خطا در خواندن فایل انتخاب‌شده"));
         reader.readAsDataURL(file);
+      });
+    }
+
+    // فشرده‌سازی هوشمند عکس‌های دوربین گوشی (مثلاً ۸ مگابایت -> ~۱۵۰ کیلوبایت شفاف) برای ارسال فوری با اینترنت موبایل ایران
+    async function fileToBase64(file) {
+      if (!file) return "";
+      const fType = String(file.type || "").toLowerCase();
+      const fName = String(file.name || "").toLowerCase();
+      const isPdf = fType === "application/pdf" || fName.endsWith(".pdf");
+
+      if (isPdf) {
+        if (file.size > 5 * 1024 * 1024) {
+          throw new Error("حجم فایل PDF نباید بیشتر از ۵ مگابایت باشد.");
+        }
+        return await readRawDataUrl(file);
+      }
+
+      const rawUrl = await readRawDataUrl(file);
+      const isImage = fType.startsWith("image/") || fName.endsWith(".jpg") || fName.endsWith(".jpeg") || fName.endsWith(".png") || fName.endsWith(".webp");
+      if (!isImage) return rawUrl;
+
+      return await new Promise((resolve) => {
+        const img = new Image();
+        img.onload = () => {
+          try {
+            const MAX_SIDE = 1440;
+            let w = img.naturalWidth || img.width || 1000;
+            let h = img.naturalHeight || img.height || 1000;
+            if (w > MAX_SIDE || h > MAX_SIDE) {
+              if (w >= h) {
+                h = Math.round((h * MAX_SIDE) / w);
+                w = MAX_SIDE;
+              } else {
+                w = Math.round((w * MAX_SIDE) / h);
+                h = MAX_SIDE;
+              }
+            }
+            const canvas = document.createElement("canvas");
+            canvas.width = w;
+            canvas.height = h;
+            const ctx2d = canvas.getContext("2d");
+            ctx2d.fillStyle = "#FFFFFF";
+            ctx2d.fillRect(0, 0, w, h);
+            ctx2d.drawImage(img, 0, 0, w, h);
+            const compressed = canvas.toDataURL("image/jpeg", 0.80);
+            resolve(compressed && compressed.length < rawUrl.length ? compressed : rawUrl);
+          } catch {
+            resolve(rawUrl);
+          }
+        };
+        img.onerror = () => resolve(rawUrl);
+        img.src = rawUrl;
       });
     }
 
@@ -8845,7 +8981,7 @@ function buildAppHtml(defaultApiBase: string = ""): string {
           <div style="font-size:18px;font-weight:800;color:var(--gold-light);">اپلیکیشن کلاس هوشمند</div>
           <div class="muted" style="color:#E2E8F0;margin-top:4px;">سامانه یکپارچه هوشمند آموزشی و ربات تلگرام مدرسه</div>
           <div style="margin-top:10px;display:flex;justify-content:center;">
-            <button class="icon-btn" style="font-size:11px;border-color:rgba(56,189,248,0.5);color:#BAE6FD;" onclick="openServerModal()">🌐 سرور متصل: <span dir="ltr">\${esc((getApiBase() || location.origin).replace(/^https?:\\/\\//,''))}</span> (تغییر سرور مدرسه)</button>
+            <button class="icon-btn" style="font-size:11px;border-color:rgba(56,189,248,0.5);color:#BAE6FD;" onclick="openServerModal()">🌐 سرور متصل: <span dir="ltr">\${esc((getApiBase() || location.origin).split("://").pop())}</span> (تغییر سرور مدرسه)</button>
           </div>
         </div>
 
@@ -9040,7 +9176,7 @@ function buildAppHtml(defaultApiBase: string = ""): string {
           <div class="section-title">📤 ارسال تکلیف کلاسی</div>
           <textarea id="hwText" rows="3" placeholder="پاسخ تکلیف یا توضیح عکس تکلیفت را بنویس..."></textarea>
           <input type="file" id="hwFile" accept="image/*,.pdf" class="input" />
-          <button class="btn btn-emerald" onclick="submitStudentHomework()">📨 ارسال تکلیف به معلم</button>
+          <button id="hwSubmitBtn" class="btn btn-emerald" onclick="submitStudentHomework()">📨 ارسال تکلیف به معلم</button>
         </div>
 
         \${d.deadlines.length ? \`
@@ -9061,9 +9197,10 @@ function buildAppHtml(defaultApiBase: string = ""): string {
       try {
         const text = document.getElementById("missionText").value.trim();
         const f = document.getElementById("missionFile").files[0];
+        if (!text && !f) return showToast("توضیح متنی یا عکس ماموریت را انتخاب کن");
+        showToast("⏳ در حال آماده‌سازی و ارسال گزارش ماموریت...");
         let imageB64 = "";
         if (f) imageB64 = await fileToBase64(f);
-        if (!text && !imageB64) return showToast("توضیح متنی یا عکس ماموریت را انتخاب کن");
         await api("/api/app/student/mission", { text, imageB64 });
         showToast("✅ گزارش ماموریت برای تایید معلم ارسال شد!");
         renderApp();
@@ -9071,16 +9208,21 @@ function buildAppHtml(defaultApiBase: string = ""): string {
     }
 
     async function submitStudentHomework() {
+      const btn = document.getElementById("hwSubmitBtn");
       try {
         const text = document.getElementById("hwText").value.trim();
         const f = document.getElementById("hwFile").files[0];
+        if (!text && !f) return showToast("متن تکلیف یا عکس آن را وارد کن");
+        if (btn) { btn.disabled = true; btn.textContent = "⏳ در حال بهینه‌سازی و ارسال تکلیف..."; }
         let imageB64 = "";
         if (f) imageB64 = await fileToBase64(f);
-        if (!text && !imageB64) return showToast("متن تکلیف یا عکس آن را وارد کن");
         const r = await api("/api/app/student/homework", { text, imageB64, fileName: f?.name || "" });
-        showToast("✅ تکلیف ارسال شد! استریک: " + r.streak + " روز 🔥");
+        showToast("✅ تکلیف با موفقیت ارسال شد! استریک: " + r.streak + " روز 🔥");
         renderApp();
-      } catch (e) { showToast("❌ " + e.message); }
+      } catch (e) {
+        if (btn) { btn.disabled = false; btn.textContent = "📨 ارسال تکلیف به معلم"; }
+        showToast("❌ " + e.message);
+      }
     }
 
     // ---- تب ۲ دانش‌آموز: پرسش و پاسخ هوشمند (۱۸ ابزار آنلاین) ----
@@ -9865,8 +10007,8 @@ function buildAppHtml(defaultApiBase: string = ""): string {
           main.innerHTML = \`
             \${d.legacyNotice ? \`
               <div class="card" style="border-color:var(--gold);background:rgba(245,158,11,0.12);">
-                <div style="font-weight:800;color:var(--gold-light);margin-bottom:4px;">⚠️ حالت سازگاری فعال است (سرور کلودفلر هنوز آپدیت نشده)</div>
-                <div class="muted" style="color:#FDE68A;">مشاهده کلاس، کدهای ورود و ثبت امتیاز همین الان کار می‌کند! برای فعال شدن کامل هوش مصنوعی، کارگاه یادگیری، چت اولیا و لوح تقدیر، فایل جدید ربات را در کلودفلر دیپلوی کنید.</div>
+                <div style="font-weight:800;color:var(--gold-light);margin-bottom:4px;">⚠️ حالت سازگاری فعال است (سرور کلاس نیاز به آپدیت دارد)</div>
+                <div class="muted" style="color:#FDE68A;">مشاهده کلاس، کدهای ورود و ثبت امتیاز فعال است. برای فعال شدن تمام امکانات، فایل src/core.ts جدید را روی گیت‌هاب بارگذاری کنید.</div>
               </div>
             \` : ''}
             <div class="card hero-card">
@@ -9906,14 +10048,25 @@ function buildAppHtml(defaultApiBase: string = ""): string {
             \` : ''}
           \`;
         } else if (activeTab === "inbox") {
+          window._teacherRecentHw = d.recentHw || [];
+          const filteredHw = window._teacherRecentHw.filter(h => {
+            if (hwFilterMode === "ungraded") return !(Number(h.score) > 0);
+            if (hwFilterMode === "graded") return Number(h.score) > 0;
+            return true;
+          });
+          const ungradedCount = window._teacherRecentHw.filter(h => !(Number(h.score) > 0)).length;
+
           main.innerHTML = \`
             <div class="card">
               <div class="section-title">🧠 مستندات کارگاه یادگیری در انتظار تایید (\${d.pendingLab.length})</div>
               \${d.pendingLab.length === 0 ? '<div class="muted">همه مستندات بررسی شده‌اند ✅</div>' :
-                d.pendingLab.map(s => \`
+                d.pendingLab.map(s => {
+                  const labImg = s.tg_file_id ? \`<div style="margin:8px 0;"><img class="resp-img" style="max-height:260px;object-fit:contain;background:#020617;" src="\${buildMediaUrl(s.tg_file_id)}" alt="مستندات دانش‌آموز" /></div>\` : "";
+                  return \`
                   <div class="card" style="background:#0F172A;margin-bottom:10px;">
                     <div style="font-weight:800;color:var(--gold-light);">👤 \${esc(s.student_name)} — \${esc(s.title)}</div>
                     <div style="white-space:pre-wrap;font-size:13px;margin:6px 0;">\${esc(s.meta_note)}</div>
+                    \${labImg}
                     <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;">
                       <button class="btn btn-emerald btn-sm" onclick="decideLabApp(\${s.id}, 'approve', 3)">✅ +3</button>
                       <button class="btn btn-emerald btn-sm" onclick="decideLabApp(\${s.id}, 'approve', 5)">✅ +5</button>
@@ -9922,7 +10075,8 @@ function buildAppHtml(defaultApiBase: string = ""): string {
                       <button class="btn btn-rose btn-sm" onclick="decideLabApp(\${s.id}, 'reject', 0)">❌ رد</button>
                     </div>
                   </div>
-                \`).join("")}
+                \`;
+                }).join("")}
             </div>
 
             <div class="card">
@@ -9940,13 +10094,36 @@ function buildAppHtml(defaultApiBase: string = ""): string {
             </div>
 
             <div class="card">
-              <div class="section-title">📝 آخرین تکالیف ارسالی دانش‌آموزان</div>
-              \${d.recentHw.map(h => \`
-                <div class="att-row">
-                  <div><b>\${esc(h.name)}</b> (\${esc(h.type)}) <span class="muted">\${esc(h.date)}</span>\${h.feedback ? '<div class="muted">'+esc(h.feedback)+'</div>' : ''}</div>
-                  <button class="btn btn-gold btn-sm" onclick="gradeHwApp(\${h.id})">\${h.score>0 ? 'نمره '+h.score : 'ثبت نمره'}</button>
-                </div>
-              \`).join("")}
+              <div class="section-title">📝 تکالیف ارسالی دانش‌آموزان (مشاهده تصویر، متن و تصحیح)</div>
+              <div class="sub-tabs" style="margin-bottom:10px;">
+                <button class="role-tab \${hwFilterMode==='all'?'active':''}" onclick="hwFilterMode='all';renderApp()">همه (\${window._teacherRecentHw.length})</button>
+                <button class="role-tab \${hwFilterMode==='ungraded'?'active':''}" onclick="hwFilterMode='ungraded';renderApp()">⏳ تصحیح‌نشده (\${ungradedCount})</button>
+                <button class="role-tab \${hwFilterMode==='graded'?'active':''}" onclick="hwFilterMode='graded';renderApp()">✅ نمره‌دار</button>
+              </div>
+              \${filteredHw.length === 0 ? '<div class="muted">تکلیفی در این بخش وجود ندارد.</div>' :
+                filteredHw.map(h => {
+                  const hasMedia = Boolean(h.tg_file_id);
+                  const hasTxt = Boolean(h.content_text && h.content_text.trim());
+                  const snippet = hasTxt ? (h.content_text.length > 65 ? h.content_text.slice(0, 65) + "..." : h.content_text) : "";
+                  const mediaBadge = hasMedia
+                    ? (h.media_kind === "voice" || h.media_kind === "audio" ? "🎤 دارای فایل صوتی" : h.media_kind === "video" ? "🎬 دارای ویدیو" : h.media_kind === "document" ? "📄 دارای فایل پیوست" : "📷 دارای تصویر تکلیف")
+                    : (hasTxt ? "✍️ دارای متن تکلیف" : "");
+                  return \`
+                  <div class="att-row" style="align-items:flex-start;gap:10px;padding:12px;">
+                    <div style="flex:1;min-width:0;">
+                      <div style="font-weight:800;">👤 \${esc(h.name)} <span class="badge-pill" style="font-size:11px;">\${esc(h.type)}</span></div>
+                      <div class="muted" style="margin-top:3px;">📅 \${esc(h.date)} \${mediaBadge ? ' • <span style="color:#38BDF8;">' + mediaBadge + '</span>' : ''}</div>
+                      \${snippet ? \`<div style="font-size:12px;color:#CBD5E1;margin-top:5px;background:#0B1120;padding:6px 8px;border-radius:8px;">\${esc(snippet)}</div>\` : ''}
+                      \${h.feedback ? \`<div style="font-size:12px;color:var(--emerald);margin-top:4px;">💬 بازخورد شما: \${esc(h.feedback)}</div>\` : ''}
+                    </div>
+                    <div style="display:flex;flex-direction:column;gap:6px;min-width:108px;">
+                      <button class="btn \${h.score>0 ? 'btn-emerald' : 'btn-gold'} btn-sm" onclick="openHwInspector(\${h.id})">
+                        \${h.score>0 ? '👁 نمره: ' + h.score : '👁 مشاهده و نمره'}
+                      </button>
+                    </div>
+                  </div>
+                \`;
+                }).join("")}
             </div>
           \`;
         } else if (activeTab === "att") {
@@ -10115,13 +10292,131 @@ function buildAppHtml(defaultApiBase: string = ""): string {
         renderApp();
       } catch (e) { showToast("❌ " + e.message); }
     }
+    function closeHwModal() {
+      document.getElementById("hwModal").classList.remove("show");
+    }
+    function toggleHwImageZoom() {
+      const img = document.getElementById("hwPreviewImg");
+      if (!img) return;
+      const zoomed = img.dataset.zoomed === "1";
+      if (zoomed) {
+        img.style.width = "100%";
+        img.style.maxWidth = "100%";
+        img.dataset.zoomed = "0";
+      } else {
+        img.style.width = "210%";
+        img.style.maxWidth = "none";
+        img.dataset.zoomed = "1";
+      }
+    }
+    function fillQuickHwGrade(score, fb) {
+      const sInp = document.getElementById("hwGradeScore");
+      const fInp = document.getElementById("hwGradeFeedback");
+      if (sInp) sInp.value = String(score);
+      if (fInp) fInp.value = fb;
+    }
+    function openHwInspector(hwId) {
+      const h = (window._teacherRecentHw || []).find(x => Number(x.id) === Number(hwId));
+      if (!h) return;
+      const mUrl = h.tg_file_id ? buildMediaUrl(h.tg_file_id) : "";
+      let mediaHtml = "";
+      if (mUrl) {
+        if (h.media_kind === "voice" || h.media_kind === "audio") {
+          mediaHtml = \`
+            <div style="background:#0B1120;padding:12px;border-radius:14px;margin:10px 0;text-align:center;">
+              <div class="muted" style="margin-bottom:8px;">🎤 فایل صوتی ارسالی دانش‌آموز:</div>
+              <audio controls style="width:100%;" src="\${mUrl}"></audio>
+            </div>\`;
+        } else if (h.media_kind === "video") {
+          mediaHtml = \`
+            <div style="background:#0B1120;padding:10px;border-radius:14px;margin:10px 0;">
+              <video controls style="width:100%;max-height:320px;border-radius:10px;" src="\${mUrl}"></video>
+            </div>\`;
+        } else if (h.media_kind === "document") {
+          mediaHtml = \`
+            <div style="background:#0B1120;padding:14px;border-radius:14px;margin:10px 0;text-align:center;">
+              <div style="margin-bottom:8px;font-weight:700;">📄 فایل پیوست (PDF / سند)</div>
+              <a class="btn btn-sm" target="_blank" href="\${mUrl}">📥 باز کردن / دانلود فایل تکلیف</a>
+            </div>\`;
+        } else {
+          mediaHtml = \`
+            <div style="background:#020617;padding:8px;border-radius:14px;margin:10px 0;border:1px solid var(--border);">
+              <div style="overflow:auto;max-height:360px;border-radius:10px;">
+                <img id="hwPreviewImg" data-zoomed="0" src="\${mUrl}" alt="تصویر تکلیف" style="width:100%;border-radius:10px;display:block;transition:width .2s;" onclick="toggleHwImageZoom()" />
+              </div>
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;gap:8px;">
+                <button class="btn btn-ghost btn-sm" onclick="toggleHwImageZoom()">🔍 بزرگ‌نمایی ۲ برابر</button>
+                <a class="btn btn-ghost btn-sm" target="_blank" href="\${mUrl}">🖼 باز کردن تصویر کامل</a>
+              </div>
+            </div>\`;
+        }
+      }
+
+      const textHtml = h.content_text && h.content_text.trim()
+        ? \`<div style="background:#0B1120;padding:12px;border-radius:12px;margin:10px 0;white-space:pre-wrap;font-size:13.5px;line-height:1.75;border:1px solid var(--border);">\${esc(h.content_text)}</div>\`
+        : (!mUrl ? \`<div style="background:#0B1120;padding:12px;border-radius:12px;margin:10px 0;" class="muted">ℹ️ این تکلیف قبل از نسخه ۲.۱ ثبت شده و تصویر آن در آرشیو گفتگوی ربات تلگرام موجود است. از همین‌جا می‌توانید نمره و بازخورد آن را ثبت کنید؛ تمام تکالیف جدید با تصویر و متن کامل همین‌جا نمایش داده می‌شوند.</div>\` : "");
+
+      const body = document.getElementById("hwModalBody");
+      body.innerHTML = \`
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+          <div class="section-title" style="margin:0;">📝 بررسی تکلیف «\${esc(h.name)}»</div>
+          <button class="icon-btn" onclick="closeHwModal()">✖️</button>
+        </div>
+        <div class="muted" style="margin-bottom:6px;">نوع: \${esc(h.type)} • تاریخ ارسال: \${esc(h.date)}</div>
+        \${mediaHtml}
+        \${textHtml}
+
+        <div style="border-top:1px solid var(--border);padding-top:12px;margin-top:10px;">
+          <div style="font-weight:700;font-size:13px;margin-bottom:8px;">⚡ نمره‌دهی سریع با یک لمس:</div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;">
+            <button class="btn btn-emerald btn-sm" onclick="fillQuickHwGrade(20, 'آفرین قهرمان! تکلیفت بسیار دقیق، تمیز و کامل بود 🌟')">🌟 ۲۰ عالی</button>
+            <button class="btn btn-emerald btn-sm" onclick="fillQuickHwGrade(19, 'بسیار خوب و مرتب بود، خسته نباشی 👏')">👏 ۱۹ خیلی خوب</button>
+            <button class="btn btn-gold btn-sm" onclick="fillQuickHwGrade(18, 'خوب بود، با کمی دقت بیشتر عالی می‌شوی 👍')">👍 ۱۸ خوب</button>
+            <button class="btn btn-rose btn-sm" onclick="fillQuickHwGrade(14, 'نیاز به بررسی دوباره و اصلاح موارد گفته‌شده دارد 📝')">📝 نیاز به اصلاح</button>
+          </div>
+
+          <div class="grid-2" style="margin-bottom:8px;">
+            <div>
+              <label class="muted" style="display:block;margin-bottom:4px;">نمره تکلیف (از ۲۰):</label>
+              <input id="hwGradeScore" type="number" dir="ltr" class="input" style="margin:0;" value="\${h.score > 0 ? h.score : 20}" />
+            </div>
+            <div>
+              <label class="muted" style="display:block;margin-bottom:4px;">امتیاز تشویقی کلاس:</label>
+              <select id="hwGradeBonus" class="input" style="margin:0;">
+                <option value="0">بدون امتیاز اضافه</option>
+                <option value="1">⭐ +1 امتیاز تشویقی</option>
+                <option value="3">⭐ +3 امتیاز تشویقی</option>
+                <option value="5">⭐ +5 امتیاز ویژه</option>
+              </select>
+            </div>
+          </div>
+
+          <label class="muted" style="display:block;margin-bottom:4px;">بازخورد معلم (قابل مشاهده در پنل دانش‌آموز، والدین و تلگرام):</label>
+          <textarea id="hwGradeFeedback" rows="2" placeholder="نظر تشویقی یا نکته آموزشی...">\${esc(h.feedback || "آفرین، عالی بود! 🌟")}</textarea>
+
+          <div class="grid-2" style="margin-top:8px;">
+            <button class="btn btn-emerald" onclick="submitHwInspectorGrade(\${h.id})">💾 ثبت نمره و بازخورد</button>
+            <button class="btn btn-ghost" onclick="closeHwModal()">بستن</button>
+          </div>
+        </div>
+      \`;
+      document.getElementById("hwModal").classList.add("show");
+    }
+
+    async function submitHwInspectorGrade(hwId) {
+      try {
+        const score = parseInt(normDigits(document.getElementById("hwGradeScore").value), 10) || 0;
+        const bonusPts = parseInt(document.getElementById("hwGradeBonus").value, 10) || 0;
+        const feedback = document.getElementById("hwGradeFeedback").value.trim() || "بررسی شد ✅";
+        await api("/api/app/teacher/grade-hw", { hwId, score, feedback, bonusPts });
+        closeHwModal();
+        showToast("✅ نمره " + score + (bonusPts > 0 ? " و +" + bonusPts + " امتیاز" : "") + " ثبت و به دانش‌آموز اطلاع داده شد!");
+        renderApp();
+      } catch (e) { showToast("❌ " + e.message); }
+    }
+
     async function gradeHwApp(hwId) {
-      const scoreStr = prompt("نمره تکلیف را وارد کنید (مثلاً 20):");
-      if (scoreStr === null) return;
-      const feedback = prompt("بازخورد تشویقی برای دانش‌آموز و والدین:") || "آفرین، عالی بود!";
-      await api("/api/app/teacher/grade-hw", { hwId, score: parseInt(scoreStr, 10) || 0, feedback });
-      showToast("✅ نمره و بازخورد ثبت شد!");
-      renderApp();
+      openHwInspector(hwId);
     }
     async function toggleAttApp(userId, cur) {
       const next = cur === "present" ? "absent" : cur === "absent" ? "late" : "present";
@@ -10541,6 +10836,49 @@ async function handleAppRequest(
       });
     }
 
+    // ==================== پروکسی امن و بدون فیلتر فایل‌ها و تصاویر تلگرام ====================
+    if (path === "/api/app/media" && request.method === "GET") {
+      const fid = (url.searchParams.get("fid") || "").trim();
+      const qTok = (url.searchParams.get("t") || "").trim();
+      const hdrTok = (request.headers.get("Authorization") || "").replace(/^Bearer\s+/i, "").trim();
+      const mediaAuth = await verifyToken(qTok || hdrTok, core.PANEL_PASSWORD);
+      if (!mediaAuth) return jsonResp({ error: "دسترسی غیرمجاز" }, 401);
+      if (!fid) return jsonResp({ error: "شناسه فایل نامعتبر است" }, 400);
+
+      try {
+        const botTok = String(env.BOT_TOKEN || BOT_TOKEN || "").trim();
+        const metaRes = await fetch(`https://api.telegram.org/bot${botTok}/getFile?file_id=${encodeURIComponent(fid)}`);
+        const metaJson = (await metaRes.json()) as any;
+        const filePath = metaJson?.result?.file_path;
+        if (!filePath) return jsonResp({ error: "فایل در تلگرام یافت نشد" }, 404);
+
+        const fileRes = await fetch(`https://api.telegram.org/file/bot${botTok}/${filePath}`);
+        if (!fileRes.ok || !fileRes.body) return jsonResp({ error: "خطا در دریافت فایل" }, 502);
+
+        const lower = String(filePath).toLowerCase();
+        let contentType = fileRes.headers.get("content-type") || "application/octet-stream";
+        if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) contentType = "image/jpeg";
+        else if (lower.endsWith(".png")) contentType = "image/png";
+        else if (lower.endsWith(".webp")) contentType = "image/webp";
+        else if (lower.endsWith(".oga") || lower.endsWith(".ogg") || lower.endsWith(".opus")) contentType = "audio/ogg";
+        else if (lower.endsWith(".mp3")) contentType = "audio/mpeg";
+        else if (lower.endsWith(".m4a")) contentType = "audio/mp4";
+        else if (lower.endsWith(".mp4")) contentType = "video/mp4";
+        else if (lower.endsWith(".pdf")) contentType = "application/pdf";
+
+        return new Response(fileRes.body, {
+          status: 200,
+          headers: {
+            "Content-Type": contentType,
+            "Cache-Control": "private, max-age=86400",
+            ...CORS_HEADERS,
+          },
+        });
+      } catch (err: any) {
+        return jsonResp({ error: "خطا در بارگذاری رسانه: " + (err?.message || "") }, 500);
+      }
+    }
+
     // ==================== احراز هویت توکن برای بقیه مسیرها ====================
     const authHeader = request.headers.get("Authorization") || "";
     const rawToken = authHeader.replace(/^Bearer\s+/i, "").trim();
@@ -10612,10 +10950,15 @@ async function handleAppRequest(
 
       if (path === "/api/app/student/homework" && request.method === "POST") {
         const body = (await request.json()) as any;
-        const typeLabel = body.imageB64 ? "📱📷 تکلیف تصویری اپ" : "📱✍️ تکلیف متنی اپ";
+        const rawB64 = String(body.imageB64 || "");
+        const isPdf = rawB64.startsWith("data:application/pdf");
+        const typeLabel = rawB64 ? (isPdf ? "📱📄 فایل PDF اپ" : "📱📷 تکلیف تصویری اپ") : "📱✍️ تکلیف متنی اپ";
         const hwId = await core.addHomework(db, uid, student.name, typeLabel);
         const streakRes = await core.updateStreak(db, uid);
         await core.checkAndAwardBadges(db, uid);
+
+        let tgFileId = "";
+        let mediaKind = rawB64 ? (isPdf ? "document" : "photo") : "text";
 
         try {
           const bot = core.createBot(env);
@@ -10623,13 +10966,30 @@ async function handleAppRequest(
             .text("✅ تایید", `approve_${hwId}`).text("❌ رد", `reject_${hwId}`).row()
             .text("⭐ +1", `quick_${hwId}_1`).text("⭐ +3", `quick_${hwId}_3`).text("⭐ +5", `quick_${hwId}_5`);
           const msgTxt = `📱📥 تکلیف ارسالی از اپلیکیشن\n👤 دانش‌آموز: ${student.name}\n🆔 ID: ${hwId}\n📝 متن: ${body.text || "فایل پیوست"}`;
-          if (body.imageB64) {
-            const bytes = dataUrlToBytes(body.imageB64);
-            if (bytes) await bot.api.sendPhoto(core.TEACHER_ID, new InputFile(bytes, "homework.jpg"), { caption: msgTxt.slice(0, 950), reply_markup: kb });
+          if (rawB64) {
+            const bytes = dataUrlToBytes(rawB64);
+            if (bytes) {
+              if (isPdf) {
+                const sent: any = await bot.api.sendDocument(core.TEACHER_ID, new InputFile(bytes, "homework.pdf"), {
+                  caption: msgTxt.slice(0, 950),
+                  reply_markup: kb,
+                });
+                tgFileId = sent?.document?.file_id || "";
+              } else {
+                const sent: any = await bot.api.sendPhoto(core.TEACHER_ID, new InputFile(bytes, "homework.jpg"), {
+                  caption: msgTxt.slice(0, 950),
+                  reply_markup: kb,
+                });
+                const ph = sent?.photo;
+                tgFileId = Array.isArray(ph) && ph.length > 0 ? ph[ph.length - 1].file_id : "";
+              }
+            }
           } else {
             await bot.api.sendMessage(core.TEACHER_ID, msgTxt.slice(0, 4000), { reply_markup: kb });
           }
         } catch {}
+
+        await saveSubmissionMedia(db, "hw", hwId, String(body.text || ""), tgFileId, mediaKind);
 
         return jsonResp({ ok: true, hwId, streak: streakRes.streak });
       }
@@ -10736,6 +11096,7 @@ async function handleAppRequest(
           metaNote: `نتیجه بررسی اولیه AI:\n${aiCheck.slice(0, 600)}`,
         });
 
+        let dictFileId = "";
         try {
           const bot = core.createBot(env);
           const kb = new InlineKeyboard()
@@ -10744,12 +11105,15 @@ async function handleAppRequest(
             .text("✏️ امتیاز دلخواه", `lab_custom_${subId}`).text("❌ رد", `lab_rej_${subId}`);
           const bytes = dataUrlToBytes(imageB64);
           if (bytes) {
-            await bot.api.sendPhoto(core.TEACHER_ID, new InputFile(bytes, "dictation.jpg"), {
+            const sent: any = await bot.api.sendPhoto(core.TEACHER_ID, new InputFile(bytes, "dictation.jpg"), {
               caption: `📱🎙 برگه دیکته ارسالی از اپلیکیشن\n👤 ${student.name}\n\n${aiCheck}`.slice(0, 950),
               reply_markup: kb,
             });
+            const ph = sent?.photo;
+            dictFileId = Array.isArray(ph) && ph.length > 0 ? ph[ph.length - 1].file_id : "";
           }
         } catch {}
+        await saveSubmissionMedia(db, "lab", subId, aiCheck, dictFileId, dictFileId ? "photo" : "text");
 
         return jsonResp({ aiCheck });
       }
@@ -10799,6 +11163,7 @@ async function handleAppRequest(
           metaNote: `خلاصه/توضیح دانش‌آموز:\n${String(body.text || "تصویر پیوست").slice(0, 800)}`,
         });
 
+        let labFileId = "";
         try {
           const bot = core.createBot(env);
           const kb = new InlineKeyboard()
@@ -10808,11 +11173,19 @@ async function handleAppRequest(
           const msgTxt = `📱🧠 مستندات کارگاه یادگیری از اپلیکیشن\n👤 دانش‌آموز: ${student.name}\n📌 بخش: ${body.title}\n📝 خلاصه ارسالی:\n${body.text || "تصویر پیوست"}`;
           if (body.imageB64) {
             const bytes = dataUrlToBytes(body.imageB64);
-            if (bytes) await bot.api.sendPhoto(core.TEACHER_ID, new InputFile(bytes, "proof.jpg"), { caption: msgTxt.slice(0, 950), reply_markup: kb });
+            if (bytes) {
+              const sent: any = await bot.api.sendPhoto(core.TEACHER_ID, new InputFile(bytes, "proof.jpg"), {
+                caption: msgTxt.slice(0, 950),
+                reply_markup: kb,
+              });
+              const ph = sent?.photo;
+              labFileId = Array.isArray(ph) && ph.length > 0 ? ph[ph.length - 1].file_id : "";
+            }
           } else {
             await bot.api.sendMessage(core.TEACHER_ID, msgTxt.slice(0, 4000), { reply_markup: kb });
           }
         } catch {}
+        await saveSubmissionMedia(db, "lab", subId, String(body.text || ""), labFileId, labFileId ? "photo" : "text");
 
         return jsonResp({ ok: true, subId });
       }
@@ -11029,12 +11402,28 @@ async function handleAppRequest(
           });
         }
 
+        await ensureExtraTables(db);
         const pendingLab = (
-          await db.prepare("SELECT * FROM lab_submissions WHERE status = 'pending' ORDER BY id DESC LIMIT 25").all<any>()
+          await db
+            .prepare(
+              `SELECT l.*, COALESCE(m.content_text, '') AS content_text, COALESCE(m.tg_file_id, '') AS tg_file_id, COALESCE(m.media_kind, '') AS media_kind
+               FROM lab_submissions l
+               LEFT JOIN submission_media m ON m.item_type = 'lab' AND m.item_id = l.id
+               WHERE l.status = 'pending'
+               ORDER BY l.id DESC LIMIT 25`
+            )
+            .all<any>()
         ).results;
         const pendingShop = await core.getPendingShopOrders(db);
         const recentHw = (
-          await db.prepare("SELECT * FROM homework ORDER BY id DESC LIMIT 15").all<any>()
+          await db
+            .prepare(
+              `SELECT h.*, COALESCE(m.content_text, '') AS content_text, COALESCE(m.tg_file_id, '') AS tg_file_id, COALESCE(m.media_kind, '') AS media_kind
+               FROM homework h
+               LEFT JOIN submission_media m ON m.item_type = 'hw' AND m.item_id = h.id
+               ORDER BY h.id DESC LIMIT 40`
+            )
+            .all<any>()
         ).results.map((h: any) => ({ ...h, date: core.toJalali(h.date) }));
         const deadlines = await core.getAllDeadlines(db);
         const muddy = await core.getRecentMuddyFeedback(db);
@@ -11136,10 +11525,25 @@ async function handleAppRequest(
       }
 
       if (path === "/api/app/teacher/grade-hw" && request.method === "POST") {
-        const { hwId, score, feedback } = (await request.json()) as any;
+        const { hwId, score, feedback, bonusPts } = (await request.json()) as any;
         const hw = await core.getHomeworkById(db, Number(hwId));
         if (!hw) return jsonResp({ error: "تکلیف پیدا نشد." }, 404);
-        await core.setHomeworkFeedback(db, hw.id, Number(score) || 0, String(feedback || ""));
+        const cleanScore = Number(score) || 0;
+        const cleanFeedback = String(feedback || "");
+        const cleanBonus = Math.max(0, Number(bonusPts) || 0);
+        await core.setHomeworkFeedback(db, hw.id, cleanScore, cleanFeedback);
+        if (cleanBonus > 0) {
+          await core.updateScore(db, hw.user_id, cleanBonus);
+        }
+        try {
+          if (hw.user_id < 800000000) {
+            const bot = core.createBot(env);
+            await bot.api.sendMessage(
+              hw.user_id,
+              `🎉 تکلیف تو توسط معلم بررسی و تصحیح شد!\n📊 نمره: ${cleanScore} از ۲۰${cleanBonus > 0 ? `\n⭐ امتیاز تشویقی: +${cleanBonus}` : ""}\n💬 نظر معلم: ${cleanFeedback}`
+            );
+          }
+        } catch {}
         return jsonResp({ ok: true });
       }
 

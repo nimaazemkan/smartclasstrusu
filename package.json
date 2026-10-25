@@ -1,0 +1,26 @@
+{
+  "name": "smartclass-render-turso",
+  "version": "2.1.0",
+  "private": true,
+  "type": "module",
+  "description": "سامانه جامع مدرسه و کلاس هوشمند (ربات تلگرام + وب‌اپ + سرور اپلیکیشن اندروید ۳ پنله) روی Render / Netlify + Turso SQLite",
+  "scripts": {
+    "build": "esbuild server-entry.ts --bundle --platform=node --format=esm --packages=external --outfile=dist/server.mjs",
+    "start": "node dist/server.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@libsql/client": "^0.14.0",
+    "esbuild": "^0.25.0",
+    "grammy": "^1.35.0",
+    "jalaali-js": "^1.2.8",
+    "unpdf": "1.9.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "typescript": "^5.6.3"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

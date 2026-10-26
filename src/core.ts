@@ -8585,6 +8585,7 @@ function buildAppHtml(defaultApiBase: string = ""): string {
         </div>
       </div>
       <div style="display:flex;gap:6px;">
+        <button class="icon-btn" style="color:#7DD3FC;border-color:rgba(125,211,252,0.45);" onclick="location.href='/school'" title="شبکه مدارس هوشمند — ورود با کد مدرسه">🏫 مدارس</button>
         <button class="icon-btn" onclick="openServerModal()" title="تنظیمات اتصال">⚙️</button>
         <button class="icon-btn" id="logoutBtn" style="display:none;" onclick="doLogout()">خروج 🚪</button>
       </div>

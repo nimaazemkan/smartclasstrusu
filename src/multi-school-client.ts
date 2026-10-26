@@ -303,6 +303,21 @@ const SCHOOL_JS = String.raw`
 
       var main = document.getElementById("mainView");
       if (activeTab === "live") {
+        if (session.role === "teacher") {
+          main.innerHTML = '<div class="card" style="text-align:center;">⏳ در حال آماده‌سازی اتاق کلاس...</div>';
+          Promise.resolve()
+            .then(function () { return ensureHome(); })
+            .then(function () {
+              if (!resolveSelClass()) {
+                main.innerHTML = '<div class="card">⚠️ هنوز کلاسی به شما اختصاص داده نشده است؛ از مدیر مدرسه بخواهید کلاس‌های شما را تعریف کند.</div>';
+                return;
+              }
+              window.LIVE_ROOM_KEY = myRoomKey();
+              renderLiveClassroomPanel(main);
+            })
+            .catch(function (e) { main.innerHTML = '<div class="card">❌ ' + esc(e.message) + '</div>'; });
+          return;
+        }
         window.LIVE_ROOM_KEY = myRoomKey();
         renderLiveClassroomPanel(main);
         return;
@@ -324,7 +339,9 @@ const SCHOOL_JS = String.raw`
     function myRoomKey() {
       if (!session || !session.schoolId) return "";
       if (session.role === "student") return "s" + session.schoolId + "c" + session.classId;
-      if (session.role === "teacher") return selClassId ? "s" + session.schoolId + "c" + selClassId : "";
+      if (session.role === "teacher") {
+        return resolveSelClass() ? "s" + session.schoolId + "c" + selClassId : "";
+      }
       return "";
     }
 
@@ -410,10 +427,7 @@ const SCHOOL_JS = String.raw`
       if (!msData || !msData.classes || !msData.classes.length) {
         return '<div class="card" style="margin-bottom:10px;">⚠️ هنوز کلاسی به شما اختصاص داده نشده است؛ از مدیر مدرسه بخواهید کلاس‌های شما را تعریف کند.</div>';
       }
-      if (!selClassId || !msData.classes.some(function (c) { return c.id === selClassId; })) {
-        selClassId = msData.classes[0].id;
-        localStorage.setItem("ms_class", String(selClassId));
-      }
+      resolveSelClass();
       return '<div class="card" style="margin-bottom:10px;padding:10px;">' +
         '<div style="display:flex;align-items:center;gap:8px;">' +
           '<b>📚 کلاس فعال:</b>' +
@@ -439,7 +453,19 @@ const SCHOOL_JS = String.raw`
       renderApp();
     }
 
+    // انتخاب قطعی «کلاس فعال» قبل از هر درخواستی به سرور (رفع خطای «این کلاس در اختیار شما نیست»)
+    function resolveSelClass() {
+      if (!msData || !msData.classes || !msData.classes.length) return 0;
+      if (!selClassId || !msData.classes.some(function (c) { return c.id === selClassId; })) {
+        selClassId = msData.classes[0].id;
+        tcClass = null;
+        try { localStorage.setItem("ms_class", String(selClassId)); } catch (e) {}
+      }
+      return selClassId;
+    }
+
     async function ensureTcClass() {
+      if (!resolveSelClass()) return null;
       if (!tcClass) {
         tcClass = await api("/api/ms/teacher/class?classId=" + selClassId);
       }
@@ -454,8 +480,10 @@ const SCHOOL_JS = String.raw`
           main.innerHTML = classSwitcherHtml();
           return;
         }
+        resolveSelClass();
         if (activeTab === "home") {
           var d = await ensureTcClass();
+          if (!d) { main.innerHTML = classSwitcherHtml(); return; }
           main.innerHTML =
             classSwitcherHtml() +
             '<div class="section-title">👥 دانش‌آموزان کلاس ' + esc(d.class.label) + '</div>' +
@@ -475,6 +503,7 @@ const SCHOOL_JS = String.raw`
             '</div>';
         } else if (activeTab === "att") {
           var d2 = await ensureTcClass();
+          if (!d2) { main.innerHTML = classSwitcherHtml(); return; }
           main.innerHTML =
             classSwitcherHtml() +
             '<div class="section-title">✅ حضور و غیاب — ' + esc(d2.class.label) + '</div>' +
@@ -494,6 +523,7 @@ const SCHOOL_JS = String.raw`
             '</div>';
         } else if (activeTab === "grades") {
           var d3 = await ensureTcClass();
+          if (!d3) { main.innerHTML = classSwitcherHtml(); return; }
           main.innerHTML =
             classSwitcherHtml() +
             '<div class="section-title">📝 ثبت نمره — درس ' + esc(d3.class.subject) + '</div>' +

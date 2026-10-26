@@ -5,9 +5,23 @@ const PORT = Number(process.env.PORT || 3000);
 
 const server = http.createServer(async (req, res) => {
   try {
-    // مسیر سلامت سریع برای Render و سرویس‌های بیدارنگهدار رایگان (cron-job.org)
-    if (req.url === "/health" || req.url === "/ping") {
-      res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
+    // مسیر سلامت فوق‌سبک برای Render و سرویس‌های بیدارنگهدار رایگان (cron-job.org / UptimeRobot)
+    const cleanPath = (req.url || "/").split("?")[0].replace(/\/+$/, "") || "/";
+    if (cleanPath === "/health" || cleanPath === "/ping" || cleanPath === "/healthz") {
+      if (req.method === "HEAD") {
+        res.writeHead(200, {
+          "Content-Type": "text/plain; charset=utf-8",
+          "Cache-Control": "no-store",
+          "Content-Length": "0",
+        });
+        res.end();
+        return;
+      }
+      res.writeHead(200, {
+        "Content-Type": "text/plain; charset=utf-8",
+        "Cache-Control": "no-store",
+        "Content-Length": "2",
+      });
       res.end("ok");
       return;
     }

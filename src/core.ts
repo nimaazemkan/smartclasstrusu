@@ -3,6 +3,14 @@ import { Bot, Context, webhookCallback, InputFile, Keyboard, InlineKeyboard } fr
 import * as jalaali from "jalaali-js";
 import { handleLiveClassRequest, getLiveRoomPublicStatus } from "./live-class";
 import { LIVE_CLASS_CSS, LIVE_CLASS_JS } from "./live-class-client";
+import {
+  handleMultiSchoolRequest,
+  msClassAccess,
+  msMarkPresent,
+  msNotifyClassStarted,
+  msRoomRoster,
+} from "./multi-school";
+import { buildSchoolHtml } from "./multi-school-client";
 
 // پلی‌فیل Iterator برای سازگاری کامل unpdf در تمام نسخه‌های V8 و Node
 if (typeof (globalThis as any).Iterator === "undefined") {
@@ -8997,6 +9005,9 @@ function buildAppHtml(defaultApiBase: string = ""): string {
             <button class="role-tab \${loginRole==='parent'?'active':''}" onclick="loginRole='parent';renderLogin()">👪 پنل والدین</button>
             <button class="role-tab \${loginRole==='teacher'?'active':''}" onclick="loginRole='teacher';renderLogin()">👨‍🏫 پنل معلم</button>
           </div>
+          <div style=\"text-align:center;margin:8px 0 2px;\">
+            <a href=\"/school\" style=\"color:#7DD3FC;font-size:12.5px;text-decoration:none;\">🏫 ورود مدارس و آموزشگاه‌ها — پیدا کردن مدرس با کد مدرس »</a>
+          </div>
 
           \${loginRole === 'student' ? \`
             <div class="section-title">🎒 ورود دانش‌آموز</div>
@@ -10848,6 +10859,13 @@ async function handleAppRequest(
       headers: { "Content-Type": "text/html; charset=utf-8" },
     });
   }
+
+  // ۱-ب. سامانه چندمدرسه‌ای «شبکه مدارس هوشمند» (/school)
+  if (path === "/school" || path === "/school/") {
+    return new Response(buildSchoolHtml(), {
+      headers: { "Content-Type": "text/html; charset=utf-8" },
+    });
+  }
   if (path === "/manifest.json") {
     return new Response(buildManifestJson(), {
       headers: { "Content-Type": "application/manifest+json; charset=utf-8" },
@@ -10864,10 +10882,23 @@ async function handleAppRequest(
     });
   }
 
-  if (!path.startsWith("/api/app/")) return null;
+  if (!path.startsWith("/api/app/") && !path.startsWith("/api/ms/")) return null;
 
   const db: D1Database = env.telegram_bot_db;
   await core.ensureExtraTables(db);
+
+  // ==================== سامانه چندمدرسه‌ای (/api/ms/*) ====================
+  if (path.startsWith("/api/ms/")) {
+    const msRes = await handleMultiSchoolRequest(request, url, {
+      db,
+      secret: core.PANEL_PASSWORD,
+      defaultBotToken: BOT_TOKEN,
+      signToken,
+      verifyToken,
+      normalizeDigits: core.normalizeDigits,
+    });
+    if (msRes) return msRes;
+  }
 
   try {
     // ==================== ورود ۳ پنله و ثبت‌نام ====================
@@ -11027,6 +11058,13 @@ async function handleAppRequest(
           return sent;
         },
         teacherName: core.TEACHER_NAME,
+        classAccess: async (schoolId, classId, a) => await msClassAccess(db, schoolId, classId, a),
+        classRoster: async (schoolId, classId) => await msRoomRoster(db, schoolId, classId),
+        markClassStudentPresent: async (schoolId, classId, uid, stName) => {
+          await msMarkPresent(db, schoolId, classId, uid, stName);
+        },
+        notifyClassStarted: async (schoolId, classId, classTitle) =>
+          await msNotifyClassStarted(db, schoolId, classId, classTitle, BOT_TOKEN),
       });
       if (liveRes) return liveRes;
     }

@@ -128,11 +128,53 @@ function initMemory(): LiveClassroomMemory {
 }
 
 const gAny = globalThis as any;
-function getRoom(): LiveClassroomMemory {
-  if (!gAny.__smartClassLiveRoom) {
-    gAny.__smartClassLiveRoom = initMemory();
+const MAX_LIVE_ROOMS = 40;
+function getRoomsMap(): Map<string, LiveClassroomMemory> {
+  if (!gAny.__smartClassLiveRooms) {
+    gAny.__smartClassLiveRooms = new Map<string, LiveClassroomMemory>();
   }
-  return gAny.__smartClassLiveRoom as LiveClassroomMemory;
+  return gAny.__smartClassLiveRooms as Map<string, LiveClassroomMemory>;
+}
+function getRoom(roomKey: string): LiveClassroomMemory {
+  const map = getRoomsMap();
+  let room = map.get(roomKey);
+  if (!room) {
+    // نگهداری حداکثر ۴۰ اتاق هم‌زمان — اتاق‌های پایان‌یافته اولویت حذف دارند
+    if (map.size >= MAX_LIVE_ROOMS) {
+      for (const [k, v] of map) {
+        if (!v.active && k !== roomKey) {
+          map.delete(k);
+          if (map.size < MAX_LIVE_ROOMS) break;
+        }
+      }
+    }
+    room = initMemory();
+    map.set(roomKey, room);
+  }
+  return room;
+}
+function findSlideInAnyRoom(id: string): { bytes: Uint8Array; mime: string } | null {
+  for (const room of getRoomsMap().values()) {
+    const item = room.slides.get(id);
+    if (item) return item;
+  }
+  return null;
+}
+
+export function getLiveRoomsStats(): Array<{ roomKey: string; active: boolean; title: string; online: number; schoolId: number; classId: number }> {
+  const out: Array<{ roomKey: string; active: boolean; title: string; online: number; schoolId: number; classId: number }> = [];
+  for (const [k, v] of getRoomsMap()) {
+    const m = /^s(\d+)c(\d+)$/.exec(k);
+    out.push({
+      roomKey: k,
+      active: v.active,
+      title: v.title,
+      online: v.participants.size,
+      schoolId: m ? Number(m[1]) : 0,
+      classId: m ? Number(m[2]) : 0,
+    });
+  }
+  return out;
 }
 
 const CORS_HEADERS = {
@@ -216,8 +258,8 @@ function buildPollSummary(poll: LivePollState | null) {
   };
 }
 
-export function getLiveRoomPublicStatus() {
-  const room = getRoom();
+export function getLiveRoomPublicStatus(roomKey: string = "default") {
+  const room = getRoom(roomKey);
   pruneStale(room);
   return {
     active: room.active,
@@ -225,16 +267,22 @@ export function getLiveRoomPublicStatus() {
     title: room.title,
     startedAt: room.startedAt,
     onlineCount: room.participants.size,
+    roomKey,
   };
 }
 
 export interface LiveClassDeps {
-  verifyAuth: (req: Request, url: URL) => Promise<{ role: string; userId?: number; studentId?: number } | null>;
+  verifyAuth: (req: Request, url: URL) => Promise<{ role: string; userId?: number; studentId?: number; schoolId?: number; classId?: number; teacherId?: number; name?: string } | null>;
   getStudent: (userId: number) => Promise<{ user_id: number; name: string } | null>;
   getAllStudents: () => Promise<Array<{ user_id: number; name: string }>>;
   markStudentPresentToday: (userId: number, name: string) => Promise<void>;
   notifyTelegramClassStarted: (title: string) => Promise<number>;
   teacherName: string;
+  // ---- پشتیبانی چندمدرسه‌ای (اختیاری) ----
+  classAccess?: (schoolId: number, classId: number, auth: { role: string; teacherId?: number; studentId?: number }) => Promise<{ ok: boolean; name?: string; myUserId?: number }>;
+  classRoster?: (schoolId: number, classId: number) => Promise<Array<{ user_id: number; name: string }>>;
+  markClassStudentPresent?: (schoolId: number, classId: number, uid: number, name: string) => Promise<void>;
+  notifyClassStarted?: (schoolId: number, classId: number, title: string) => Promise<number>;
 }
 
 export async function handleLiveClassRequest(
@@ -249,12 +297,10 @@ export async function handleLiveClassRequest(
     return new Response(null, { headers: CORS_HEADERS });
   }
 
-  const room = getRoom();
-
   // ۱. سرو تصویر اسلاید تخته (با کش مرورگر برای مصرف نزدیک به صفر اینترنت)
   if (path === "/api/app/live/slide-img" && request.method === "GET") {
     const id = (url.searchParams.get("id") || "").trim();
-    const item = room.slides.get(id);
+    const item = findSlideInAnyRoom(id);
     if (!item) return jsonOut({ error: "اسلاید یافت نشد" }, 404);
     return new Response(item.bytes as any, {
       status: 200,
@@ -266,24 +312,85 @@ export async function handleLiveClassRequest(
     });
   }
 
-  // احراز هویت معلم یا دانش‌آموز
+  // احراز هویت معلم یا دانش‌آموز (تک‌مدرسه‌ای قدیمی یا چندمدرسه‌ای)
   const auth = await deps.verifyAuth(request, url);
-  if (!auth || (auth.role !== "teacher" && auth.role !== "student")) {
+  const role = String((auth as any)?.role || "");
+  const isLegacyTeacher = role === "teacher";
+  const isLegacyStudent = role === "student";
+  const isMs = role.startsWith("ms_");
+  if (!auth || (!isLegacyTeacher && !isLegacyStudent && !isMs)) {
     return jsonOut({ error: "لطفاً وارد حساب کاربری خود شوید." }, 401);
   }
+  if (role === "ms_parent") {
+    return jsonOut({ error: "والدین به اتاق کلاس زنده دسترسی ندارند." }, 403);
+  }
 
-  const isTeacher = auth.role === "teacher";
+  // کلید اتاق: «default» برای کلاس قبلی | «s{schoolId}c{classId}» برای مدارس
+  const roomKeyRaw = (url.searchParams.get("room") || "").trim();
+  const roomKey = roomKeyRaw || "default";
+  const mKey = /^s(\d+)c(\d+)$/.exec(roomKey);
+  const roomSchoolId = mKey ? Number(mKey[1]) : 0;
+  const roomClassId = mKey ? Number(mKey[2]) : 0;
+
+  let isTeacher = isLegacyTeacher;
   let myKey = "teacher";
   let myUserId = 0;
   let myName = deps.teacherName || "استاد کلاس";
 
-  if (!isTeacher) {
-    myUserId = Number(auth.userId || 0);
-    const st = await deps.getStudent(myUserId);
-    if (!st) return jsonOut({ error: "دانش‌آموز یافت نشد." }, 404);
-    myKey = `st_${myUserId}`;
-    myName = st.name;
+  if (isMs) {
+    if (!mKey) return jsonOut({ error: "اتاق کلاس نامعتبر است." }, 403);
+    if (Number((auth as any).schoolId || 0) !== roomSchoolId) {
+      return jsonOut({ error: "شما به این کلاس دسترسی ندارید." }, 403);
+    }
+    isTeacher = role === "ms_teacher" || role === "ms_admin" || role === "ms_super";
+    if (deps.classAccess) {
+      const acc = await deps.classAccess(roomSchoolId, roomClassId, {
+        role,
+        teacherId: Number((auth as any).teacherId || 0),
+        studentId: Number((auth as any).studentId || 0),
+      });
+      if (!acc.ok) return jsonOut({ error: "شما به این کلاس دسترسی ندارید." }, 403);
+      myName = acc.name || myName;
+      if (!isTeacher) {
+        myUserId = Number(acc.myUserId || (auth as any).studentId || 0);
+        myKey = `st_${myUserId}`;
+      }
+    } else if (!isTeacher) {
+      myUserId = Number((auth as any).studentId || 0);
+      myKey = `st_${myUserId}`;
+      myName = (auth as any).name || myName;
+    }
+  } else {
+    // کلاس قبلی (تک‌مدرسه‌ای) فقط در اتاق default
+    if (mKey) return jsonOut({ error: "شما به این کلاس دسترسی ندارید." }, 403);
+    if (!isTeacher) {
+      myUserId = Number(auth.userId || 0);
+      const st = await deps.getStudent(myUserId);
+      if (!st) return jsonOut({ error: "دانش‌آموز یافت نشد." }, 404);
+      myKey = `st_${myUserId}`;
+      myName = st.name;
+    }
   }
+
+  const room = getRoom(roomKey);
+
+  const markPresent = async () => {
+    try {
+      if (mKey) {
+        if (deps.markClassStudentPresent) {
+          await deps.markClassStudentPresent(roomSchoolId, roomClassId, myUserId, myName);
+        }
+      } else {
+        await deps.markStudentPresentToday(myUserId, myName);
+      }
+    } catch {}
+  };
+  const notifyStart = async (title: string): Promise<number> => {
+    if (mKey && deps.notifyClassStarted) {
+      return await deps.notifyClassStarted(roomSchoolId, roomClassId, title);
+    }
+    return await deps.notifyTelegramClassStarted(title);
+  };
 
   // ۲. شروع کلاس آنلاین توسط معلم
   if (path === "/api/app/live/start" && request.method === "POST") {
@@ -336,7 +443,7 @@ export async function handleLiveClassRequest(
 
     let notified = 0;
     if (notifyTelegram) {
-      notified = await deps.notifyTelegramClassStarted(title).catch(() => 0);
+      notified = await notifyStart(title).catch(() => 0);
     }
 
     return jsonOut({ ok: true, roomId: room.roomId, notified });
@@ -398,7 +505,7 @@ export async function handleLiveClassRequest(
     // ثبت خودکار حضور دانش‌آموز در جدول حضوروغیاب امروز (فقط یک‌بار در هر جلسه)
     if (!isTeacher && myUserId > 0 && !room.attendanceMarked.has(myUserId)) {
       room.attendanceMarked.add(myUserId);
-      deps.markStudentPresentToday(myUserId, myName).catch(() => {});
+      markPresent();
     }
 
     // دریافت حرکات لیزر از معلم (در صورت ارسال همراه sync یا جداگانه)

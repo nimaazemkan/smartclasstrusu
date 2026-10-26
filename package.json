@@ -1,6 +1,6 @@
 {
   "name": "smartclass-render-turso",
-  "version": "2.1.0",
+  "version": "3.1.0",
   "private": true,
   "type": "module",
   "description": "سامانه جامع مدرسه و کلاس هوشمند (ربات تلگرام + وب‌اپ + سرور اپلیکیشن اندروید ۳ پنله) روی Render / Netlify + Turso SQLite",

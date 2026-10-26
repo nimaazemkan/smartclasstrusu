@@ -190,6 +190,14 @@ export const LIVE_CLASS_CSS = `
 
 export const LIVE_CLASS_JS = String.raw`
     // ==================== 🎥 موتور کلاس مجازی زنده (v3.0) ====================
+    function liveIsTeacher() {
+      return !!(session && (session.role === "teacher" || session.role === "admin" || session.role === "ms_teacher" || session.role === "ms_admin" || session.role === "super"));
+    }
+    function liveApi(p, b) {
+      var k = (typeof window !== "undefined" && window.LIVE_ROOM_KEY) || "";
+      var sep = p.indexOf("?") >= 0 ? "&" : "?";
+      return api(p + sep + "room=" + encodeURIComponent(k || "default"), b);
+    }
     var liveState = {
       timer: null,
       initedRoomId: "",
@@ -316,7 +324,7 @@ export const LIVE_CLASS_JS = String.raw`
       var notifyTelegram = tgChk ? tgChk.checked : true;
       try {
         showToast("⏳ در حال افتتاح اتاق کلاس آنلاین...");
-        var r = await api("/api/app/live/start", { title: title, notifyTelegram: notifyTelegram });
+        var r = await liveApi("/api/app/live/start", { title: title, notifyTelegram: notifyTelegram });
         liveState.initedRoomId = "";
         liveState.strokes = [];
         liveState.chats = [];
@@ -334,7 +342,7 @@ export const LIVE_CLASS_JS = String.raw`
       if (!confirm("آیا از پایان دادن به جلسه کلاس آنلاین مطمئن هستید؟")) return;
       try {
         cleanupAllRtc();
-        await api("/api/app/live/stop", {});
+        await liveApi("/api/app/live/stop", {});
         liveState.active = false;
         liveState.fullscreen = false;
         showToast("🔴 جلسه کلاس آنلاین پایان یافت.");
@@ -356,7 +364,7 @@ export const LIVE_CLASS_JS = String.raw`
           sinceSignalId: liveState.sinceSignalId,
           mediaActive: liveState.localMediaKind
         };
-        var d = await api("/api/app/live/sync", reqBody);
+        var d = await liveApi("/api/app/live/sync", reqBody);
 
         if (!d.active) {
           var wasActive = liveState.active;
@@ -477,7 +485,7 @@ export const LIVE_CLASS_JS = String.raw`
     function renderLiveInactiveView() {
       var main = document.getElementById("mainView");
       if (!main) return;
-      if (session && session.role === "teacher") {
+      if (liveIsTeacher()) {
         main.innerHTML =
           '<div class="card hero-card" id="liveInactiveCard">' +
             '<div style="font-size:34px;margin-bottom:6px;">🎥🎨</div>' +
@@ -504,7 +512,7 @@ export const LIVE_CLASS_JS = String.raw`
     function buildActiveClassroomDom() {
       var main = document.getElementById("mainView");
       if (!main) return;
-      var isTeacher = session && session.role === "teacher";
+      var isTeacher = liveIsTeacher();
       var canDraw = isTeacher || liveState.myPerms.canDraw;
       var canSpeak = isTeacher || liveState.myPerms.canSpeak;
       var supportsScreen = Boolean(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia);
@@ -702,7 +710,7 @@ export const LIVE_CLASS_JS = String.raw`
     function renderLivePodBody() {
       var box = document.getElementById("livePodContent");
       if (!box) return;
-      var isTeacher = session && session.role === "teacher";
+      var isTeacher = liveIsTeacher();
 
       if (liveState.podTab === "users") {
         var muteAllBtn = isTeacher
@@ -844,7 +852,7 @@ export const LIVE_CLASS_JS = String.raw`
     async function wbAction(action, extra) {
       var payload = Object.assign({ action: action }, extra || {});
       try {
-        await api("/api/app/live/board", payload);
+        await liveApi("/api/app/live/board", payload);
         await pollLiveClassroomOnce(false);
       } catch (e) { showToast("❌ " + e.message); }
     }
@@ -957,7 +965,7 @@ export const LIVE_CLASS_JS = String.raw`
         redrawWhiteboardOverlay();
 
         try {
-          await api("/api/app/live/board", Object.assign({ action: "stroke" }, strokeObj));
+          await liveApi("/api/app/live/board", Object.assign({ action: "stroke" }, strokeObj));
         } catch (e) {}
       };
 
@@ -971,7 +979,7 @@ export const LIVE_CLASS_JS = String.raw`
     }
 
     function sendLaserPos(x, y, active) {
-      api("/api/app/live/board", { action: "laser", x: Math.round(x), y: Math.round(y), active: active }).catch(function() {});
+      liveApi("/api/app/live/board", { action: "laser", x: Math.round(x), y: Math.round(y), active: active }).catch(function() {});
     }
 
     function drawSingleStrokeOnCtx(ctx, s, bgFillColor) {
@@ -1072,7 +1080,7 @@ export const LIVE_CLASS_JS = String.raw`
             drawContainedImage(ctx, img);
             paintStrokes();
           };
-          img.src = getApiBase() + "/api/app/live/slide-img?id=" + encodeURIComponent(meta.slideId);
+          img.src = getApiBase() + "/api/app/live/slide-img?id=" + encodeURIComponent(meta.slideId) + "&room=" + encodeURIComponent(window.LIVE_ROOM_KEY || "default");
           paintStrokes();
         }
       } else {
@@ -1156,7 +1164,7 @@ export const LIVE_CLASS_JS = String.raw`
               await page.render({ canvasContext: c2d, viewport: vp }).promise;
               var pageB64 = cnv.toDataURL("image/jpeg", 0.82);
 
-              await api("/api/app/live/slide", {
+              await liveApi("/api/app/live/slide", {
                 imageB64: pageB64,
                 mode: p === 1 && fIdx === 0 && liveState.strokes.length === 0 ? "current" : "append",
                 jumpTo: p === 1 && fIdx === 0,
@@ -1167,7 +1175,7 @@ export const LIVE_CLASS_JS = String.raw`
           } else {
             showToast("🖼 در حال قرار دادن تصویر روی تخته...");
             var imgB64 = await fileToBase64(file);
-            await api("/api/app/live/slide", {
+            await liveApi("/api/app/live/slide", {
               imageB64: imgB64,
               mode: fIdx === 0 ? "current" : "append",
               jumpTo: fIdx === 0,
@@ -1188,7 +1196,7 @@ export const LIVE_CLASS_JS = String.raw`
     async function toggleStudentHand() {
       try {
         var next = !liveState.myPerms.handRaised;
-        await api("/api/app/live/hand", { raised: next });
+        await liveApi("/api/app/live/hand", { raised: next });
         liveState.myPerms.handRaised = next;
         showToast(next ? "✋ دست شما بلند شد! استاد مطلع شدند." : "دست شما پایین آمد.");
         updateClassroomDynamicWidgets(false);
@@ -1197,14 +1205,14 @@ export const LIVE_CLASS_JS = String.raw`
 
     async function teacherHandCmd(targetKey, cmd) {
       try {
-        await api("/api/app/live/hand", { targetKey: targetKey, cmd: cmd });
+        await liveApi("/api/app/live/hand", { targetKey: targetKey, cmd: cmd });
         await pollLiveClassroomOnce(false);
       } catch (e) { showToast("❌ " + e.message); }
     }
 
     async function switchVideoEngine(engine) {
       cleanupAllRtc();
-      await api("/api/app/live/hand", { cmd: "video-engine", engine: engine });
+      await liveApi("/api/app/live/hand", { cmd: "video-engine", engine: engine });
       await pollLiveClassroomOnce(true);
     }
 
@@ -1215,20 +1223,20 @@ export const LIVE_CLASS_JS = String.raw`
       if (!txt) return;
       inp.value = "";
       try {
-        await api("/api/app/live/chat", { text: txt });
+        await liveApi("/api/app/live/chat", { text: txt });
         await pollLiveClassroomOnce(false);
       } catch (e) { showToast("❌ " + e.message); }
     }
 
     async function sendLiveChatCmd(action) {
       try {
-        await api("/api/app/live/chat", { action: action });
+        await liveApi("/api/app/live/chat", { action: action });
         await pollLiveClassroomOnce(false);
       } catch (e) { showToast("❌ " + e.message); }
     }
 
     async function createQuickUnderstandingPoll() {
-      await api("/api/app/live/poll", {
+      await liveApi("/api/app/live/poll", {
         action: "create",
         question: "آیا مبحث تدریس‌شده تا این لحظه برایتان کاملاً روشن و مفهوم بود؟",
         options: ["✅ بله، کاملاً یاد گرفتم!", "🤔 یک مثال دیگر هم حل کنید", "❓ متوجه نشدم، نیاز به توضیح دوباره دارم"]
@@ -1245,19 +1253,19 @@ export const LIVE_CLASS_JS = String.raw`
         ? rawOpts.split("،").join(",").split(",").map(function(s) { return s.trim(); }).filter(Boolean)
         : ["گزینه ۱", "گزینه ۲", "گزینه ۳", "گزینه ۴"];
       if (opts.length < 2) opts = ["گزینه ۱", "گزینه ۲", "گزینه ۳", "گزینه ۴"];
-      await api("/api/app/live/poll", { action: "create", question: q, options: opts });
+      await liveApi("/api/app/live/poll", { action: "create", question: q, options: opts });
       showToast("📊 سوال زنده برای کلاس منتشر شد!");
       await pollLiveClassroomOnce(false);
     }
 
     async function teacherPollCmd(action) {
-      await api("/api/app/live/poll", { action: action });
+      await liveApi("/api/app/live/poll", { action: action });
       await pollLiveClassroomOnce(false);
     }
 
     async function voteLivePoll(optionIndex) {
       try {
-        await api("/api/app/live/poll", { action: "vote", optionIndex: optionIndex });
+        await liveApi("/api/app/live/poll", { action: "vote", optionIndex: optionIndex });
         liveState.myPollVote = optionIndex;
         await pollLiveClassroomOnce(false);
       } catch (e) { showToast("❌ " + e.message); }
@@ -1324,7 +1332,7 @@ export const LIVE_CLASS_JS = String.raw`
       });
       liveState.outPeers = {};
       if (!silent) {
-        api("/api/app/live/signal", { to: "*", kind: "bye", payload: {} }).catch(function() {});
+        liveApi("/api/app/live/signal", { to: "*", kind: "bye", payload: {} }).catch(function() {});
         buildActiveClassroomDom();
         redrawWhiteboardBase();
         refreshVideoTilesDom();
@@ -1367,7 +1375,7 @@ export const LIVE_CLASS_JS = String.raw`
 
         pc.onicecandidate = function(ev) {
           if (ev.candidate) {
-            api("/api/app/live/signal", {
+            liveApi("/api/app/live/signal", {
               to: targetKey,
               kind: "ice",
               payload: { dir: "from-broadcaster", candidate: ev.candidate }
@@ -1377,7 +1385,7 @@ export const LIVE_CLASS_JS = String.raw`
 
         var offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
-        await api("/api/app/live/signal", {
+        await liveApi("/api/app/live/signal", {
           to: targetKey,
           kind: "offer",
           payload: { sdp: pc.localDescription }
@@ -1413,7 +1421,7 @@ export const LIVE_CLASS_JS = String.raw`
 
           pc.onicecandidate = function(ev) {
             if (ev.candidate) {
-              api("/api/app/live/signal", {
+              liveApi("/api/app/live/signal", {
                 to: sig.from,
                 kind: "ice",
                 payload: { dir: "from-listener", candidate: ev.candidate }
@@ -1424,7 +1432,7 @@ export const LIVE_CLASS_JS = String.raw`
           await pc.setRemoteDescription(new RTCSessionDescription(sig.payload.sdp));
           var answer = await pc.createAnswer();
           await pc.setLocalDescription(answer);
-          await api("/api/app/live/signal", {
+          await liveApi("/api/app/live/signal", {
             to: sig.from,
             kind: "answer",
             payload: { sdp: pc.localDescription }

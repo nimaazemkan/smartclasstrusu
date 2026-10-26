@@ -9988,7 +9988,8 @@ function buildAppHtml(defaultApiBase: string = ""): string {
     // ====================================================================
     // 👨‍🏫 ۳. پنل مدیریت معلم (Teacher Panel)
     // ====================================================================
-    let teacherSubTool = "quiz";
+    let teacherSubTool = "qa";
+    let teacherQaHistory = [];
     async function renderTeacherPanel() {
       document.getElementById("headerSub").textContent = "👨‍🏫 اتاق فرمان معلم";
       setNav([
@@ -10019,6 +10020,7 @@ function buildAppHtml(defaultApiBase: string = ""): string {
                 <div class="stat-box"><div class="stat-val">\${d.pendingLab.length + d.pendingShop.length}</div><div class="stat-lbl">منتظر تایید</div></div>
                 <div class="stat-box"><div class="stat-val">\${d.unreadParentCount}</div><div class="stat-lbl">پیام جدید اولیا</div></div>
               </div>
+              <button class="btn" style="margin-top:12px;" onclick="activeTab='ai';teacherSubTool='qa';renderApp()">❓ پرسش و پاسخ از هوش مصنوعی + ۱۸ ابزار زنده</button>
             </div>
 
             <div class="card">
@@ -10153,13 +10155,32 @@ function buildAppHtml(defaultApiBase: string = ""): string {
         } else if (activeTab === "ai") {
           main.innerHTML = \`
             <div class="sub-tabs">
+              <button class="role-tab \${teacherSubTool==='qa'?'active':''}" onclick="teacherSubTool='qa';renderApp()">❓ پرسش و پاسخ</button>
               <button class="role-tab \${teacherSubTool==='quiz'?'active':''}" onclick="teacherSubTool='quiz';renderApp()">🎲 کوییز AI</button>
               <button class="role-tab \${teacherSubTool==='summary'?'active':''}" onclick="teacherSubTool='summary';renderApp()">📚 جزوه‌ساز</button>
               <button class="role-tab \${teacherSubTool==='exam'?'active':''}" onclick="teacherSubTool='exam';renderApp()">📄 امتحان ۲۰</button>
               <button class="role-tab \${teacherSubTool==='lib'?'active':''}" onclick="teacherSubTool='lib';renderApp()">📂 کتابخانه</button>
             </div>
             <div class="card">
-              \${teacherSubTool === 'quiz' ? \`
+              \${teacherSubTool === 'qa' ? \`
+                <div class="section-title">❓ دستیار پرسش و پاسخ هوش مصنوعی ویژه معلم</div>
+                <div class="muted" style="margin-bottom:8px;">طراحی طرح درس، حل تمرین، رسم نمودار تابع، ساخت تصویر آموزشی، آیه قرآن با صوت، شعر، شیمی، فضا، دیکشنری یا تحلیل عکس برگه!</div>
+                <div class="chat-box" id="tQaBox">
+                  \${teacherQaHistory.length === 0 ? '<div class="muted" style="text-align:center;padding:24px 8px;">👋 استاد عزیز، هر سوال علمی، آموزشی، طراحی مثال کلاسی یا تحلیل تصویر برگه دارید بپرسید!</div>' :
+                    teacherQaHistory.map((m, idx) => \`
+                      <div class="bubble \${m.me ? 'bubble-me' : 'bubble-ai'}">\${esc(m.text)}
+                        \${m.photo ? \`<img class="resp-img" src="\${esc(m.photo)}" />\` : ''}
+                        \${m.audio ? \`<audio controls style="width:100%;margin-top:8px;" src="\${esc(m.audio)}"></audio>\` : ''}
+                        \${!m.me && m.canSave ? \`<div style="margin-top:8px;"><button class="btn btn-ghost btn-sm" onclick="saveTeacherQaToLibrary(\${idx})">📌 ذخیره در کتابخانه کلاس برای دانش‌آموزان</button></div>\` : ''}
+                      </div>
+                    \`).join("")}
+                </div>
+                <textarea id="tQaInput" rows="2" placeholder="سوال یا دستور خود را بنویسید (مثلاً: ۵ مثال کاربردی از قضیه فیثاغورس / نمودار sin(x) را بکش)..."></textarea>
+                <div style="display:flex;gap:8px;align-items:center;">
+                  <label class="icon-btn" style="cursor:pointer;">📸 تحلیل عکس <input type="file" id="tQaPhoto" accept="image/*" style="display:none;" onchange="sendTeacherQaPhoto(this)" /></label>
+                  <button class="btn" style="flex:1;" onclick="sendTeacherQaText()">🚀 ارسال به هوش مصنوعی</button>
+                </div>
+              \` : teacherSubTool === 'quiz' ? \`
                 <div class="section-title">🎲 طراحی و انتشار کوییز چهارگزینه‌ای در اپ و تلگرام</div>
                 <input id="tqTopic" class="input" placeholder="موضوع سوال (مثلاً: فصل ۴ ریاضی نهم توان و ریشه)" />
                 <input id="tqPoints" class="input" type="number" value="5" placeholder="امتیاز پاسخ صحیح" />
@@ -10440,6 +10461,65 @@ function buildAppHtml(defaultApiBase: string = ""): string {
       const r = await api("/api/app/teacher/attendance-notify", {});
       showToast("📨 اطلاعیه برای " + r.notified + " ولی در تلگرام ارسال شد");
     }
+    async function sendTeacherQaText() {
+      const inp = document.getElementById("tQaInput");
+      if (!inp) return;
+      const q = inp.value.trim();
+      if (!q) return;
+      inp.value = "";
+      teacherQaHistory.push({ me: true, text: q });
+      teacherQaHistory.push({ me: false, text: "⏳ در حال جستجو و نگارش پاسخ..." });
+      renderApp();
+      try {
+        const r = await api("/api/app/teacher/ai-ask", { question: q });
+        teacherQaHistory.pop();
+        teacherQaHistory.push({
+          me: false,
+          text: r.text,
+          photo: r.photoUrl || r.imageDataUrl,
+          audio: r.audioUrl,
+          canSave: Boolean(r.text && r.text.length > 20),
+        });
+      } catch (e) {
+        teacherQaHistory.pop();
+        teacherQaHistory.push({ me: false, text: "❌ " + e.message });
+      }
+      await renderApp();
+      const box = document.getElementById("tQaBox");
+      if (box) box.scrollTop = box.scrollHeight;
+    }
+
+    async function sendTeacherQaPhoto(inputEl) {
+      const f = inputEl.files && inputEl.files[0];
+      if (!f) return;
+      teacherQaHistory.push({ me: true, text: "📸 ارسال تصویر برای خوانش و تحلیل هوش مصنوعی" });
+      teacherQaHistory.push({ me: false, text: "⏳ در حال خواندن تصویر و تحلیل..." });
+      renderApp();
+      try {
+        const b64 = await fileToBase64(f);
+        const r = await api("/api/app/teacher/ai-image", { imageB64: b64 });
+        teacherQaHistory.pop();
+        teacherQaHistory.push({ me: false, text: r.analysis, canSave: true });
+      } catch (e) {
+        teacherQaHistory.pop();
+        teacherQaHistory.push({ me: false, text: "❌ " + e.message });
+      }
+      await renderApp();
+      const box = document.getElementById("tQaBox");
+      if (box) box.scrollTop = box.scrollHeight;
+    }
+
+    async function saveTeacherQaToLibrary(idx) {
+      const item = teacherQaHistory[idx];
+      if (!item || !item.text) return;
+      const title = prompt("عنوان این مطلب در کتابخانه کلاس:", "نکته آموزشی کلاس");
+      if (!title) return;
+      try {
+        await api("/api/app/teacher/library-add", { title, category: "نکات طلایی", body: item.text });
+        showToast("📂 با موفقیت در کتابخانه کلاس برای دانش‌آموزان ذخیره شد!");
+      } catch (e) { showToast("❌ " + e.message); }
+    }
+
     async function teacherMakeQuizApp() {
       try {
         const topic = document.getElementById("tqTopic").value.trim();
@@ -11588,6 +11668,28 @@ async function handleAppRequest(
           }
         }
         return jsonResp({ ok: true, notified });
+      }
+
+      if (path === "/api/app/teacher/ai-ask" && request.method === "POST") {
+        const { question } = (await request.json()) as any;
+        const res = await core.askAI(env, String(question || ""));
+        const imageDataUrl = res.imageBytes ? `data:image/jpeg;base64,${core.uint8ToBase64(res.imageBytes)}` : undefined;
+        return jsonResp({
+          text: res.text,
+          photoUrl: res.photoUrl,
+          imageDataUrl,
+          audioUrl: res.audioUrl,
+        });
+      }
+
+      if (path === "/api/app/teacher/ai-image" && request.method === "POST") {
+        const { imageB64 } = (await request.json()) as any;
+        const ocr = await core.extractTextFromImagesWithVision(env, [imageB64]);
+        const ai = await core.askAI(
+          env,
+          `شما دستیار هوشمند معلم هستید. متن استخراج‌شده از تصویر زیر را دقیق تحلیل، حل یا تصحیح کن و پاسخ کامل و مرتب به فارسی بنویس:\n${ocr}`
+        );
+        return jsonResp({ analysis: ai.text });
       }
 
       if (path === "/api/app/teacher/quiz-ai" && request.method === "POST") {

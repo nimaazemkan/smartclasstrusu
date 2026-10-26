@@ -8551,9 +8551,10 @@ function buildAppHtml(defaultApiBase: string = ""): string {
     .muted { color: var(--muted); font-size: 12.5px; }
     .section-title { font-size: 15px; font-weight: 800; margin: 4px 0 10px; display: flex; align-items: center; gap: 6px; }
     .modal-backdrop {
-      position: fixed; inset: 0; background: rgba(0,0,0,0.72); z-index: 150;
-      display: none; align-items: center; justify-content: center; padding: 16px;
+      position: fixed; inset: 0; background: rgba(0,0,0,0.78); z-index: 999;
+      display: none; align-items: center; justify-content: center; padding: 14px;
     }
+    .modal-backdrop.show { display: flex !important; }
     .modal-card {
       background: var(--surface); border: 1px solid var(--border);
       border-radius: 18px; padding: 18px; width: 100%; max-width: 440px; max-height: 86vh; overflow-y: auto;
@@ -8596,7 +8597,7 @@ function buildAppHtml(defaultApiBase: string = ""): string {
   </div>
 
   <!-- مودال مشاهده و تصحیح تکلیف دانش‌آموز -->
-  <div class="modal-backdrop" id="hwModal">
+  <div class="modal-backdrop" id="hwModal" onclick="if(event.target===this)closeHwModal()">
     <div class="modal-card" id="hwModalBody" style="max-width:500px;max-height:88vh;overflow-y:auto;"></div>
   </div>
 
@@ -10108,9 +10109,13 @@ function buildAppHtml(defaultApiBase: string = ""): string {
                   const mediaBadge = hasMedia
                     ? (h.media_kind === "voice" || h.media_kind === "audio" ? "🎤 دارای فایل صوتی" : h.media_kind === "video" ? "🎬 دارای ویدیو" : h.media_kind === "document" ? "📄 دارای فایل پیوست" : "📷 دارای تصویر تکلیف")
                     : (hasTxt ? "✍️ دارای متن تکلیف" : "");
+                  const thumbHtml = hasMedia && (h.media_kind === "photo" || !h.media_kind)
+                    ? \`<img src="\${buildMediaUrl(h.tg_file_id)}" onclick="openHwInspector(\${h.id})" style="width:56px;height:56px;object-fit:cover;border-radius:10px;border:1px solid var(--border);cursor:pointer;flex-shrink:0;background:#020617;" alt="پیش‌نمایش" />\`
+                    : "";
                   return \`
-                  <div class="att-row" style="align-items:flex-start;gap:10px;padding:12px;">
-                    <div style="flex:1;min-width:0;">
+                  <div class="att-row" style="align-items:center;gap:10px;padding:12px;">
+                    \${thumbHtml}
+                    <div style="flex:1;min-width:0;" onclick="openHwInspector(\${h.id})">
                       <div style="font-weight:800;">👤 \${esc(h.name)} <span class="badge-pill" style="font-size:11px;">\${esc(h.type)}</span></div>
                       <div class="muted" style="margin-top:3px;">📅 \${esc(h.date)} \${mediaBadge ? ' • <span style="color:#38BDF8;">' + mediaBadge + '</span>' : ''}</div>
                       \${snippet ? \`<div style="font-size:12px;color:#CBD5E1;margin-top:5px;background:#0B1120;padding:6px 8px;border-radius:8px;">\${esc(snippet)}</div>\` : ''}
@@ -10293,7 +10298,11 @@ function buildAppHtml(defaultApiBase: string = ""): string {
       } catch (e) { showToast("❌ " + e.message); }
     }
     function closeHwModal() {
-      document.getElementById("hwModal").classList.remove("show");
+      const m = document.getElementById("hwModal");
+      if (m) {
+        m.classList.remove("show");
+        m.style.display = "none";
+      }
     }
     function toggleHwImageZoom() {
       const img = document.getElementById("hwPreviewImg");
@@ -10400,7 +10409,11 @@ function buildAppHtml(defaultApiBase: string = ""): string {
           </div>
         </div>
       \`;
-      document.getElementById("hwModal").classList.add("show");
+      const modalEl = document.getElementById("hwModal");
+      if (modalEl) {
+        modalEl.classList.add("show");
+        modalEl.style.display = "flex";
+      }
     }
 
     async function submitHwInspectorGrade(hwId) {

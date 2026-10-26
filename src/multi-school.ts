@@ -128,6 +128,39 @@ export async function ensureSchoolTables(db: D1Database): Promise<void> {
       )`
     )
     .run();
+  await db
+    .prepare(
+      `CREATE TABLE IF NOT EXISTS ms_assignments (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        school_id INTEGER NOT NULL,
+        class_id INTEGER NOT NULL,
+        teacher_id INTEGER NOT NULL,
+        subject TEXT DEFAULT '',
+        title TEXT NOT NULL,
+        description TEXT DEFAULT '',
+        due_date TEXT DEFAULT '',
+        created_at TEXT
+      )`
+    )
+    .run();
+  await db
+    .prepare(
+      `CREATE TABLE IF NOT EXISTS ms_submissions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        school_id INTEGER NOT NULL,
+        assignment_id INTEGER NOT NULL,
+        student_id INTEGER NOT NULL,
+        class_id INTEGER NOT NULL,
+        text TEXT DEFAULT '',
+        photo_b64 TEXT DEFAULT '',
+        late INTEGER DEFAULT 0,
+        score REAL,
+        feedback TEXT DEFAULT '',
+        reviewed_at TEXT DEFAULT '',
+        created_at TEXT
+      )`
+    )
+    .run();
 }
 
 // ---------------------------------------------------------------------------
@@ -140,6 +173,8 @@ export interface MultiSchoolDeps {
   signToken: (payload: Record<string, any>, secret: string) => Promise<string>;
   verifyToken: (token: string, secret: string) => Promise<any | null>;
   normalizeDigits: (s: string) => string;
+  askAI?: (question: string) => Promise<{ text: string; photoUrl?: string } | string>;
+  generateQuiz?: (topic: string, count: number) => Promise<any>;
 }
 
 const CORS_HEADERS = {
@@ -792,6 +827,118 @@ export async function handleMultiSchoolRequest(
       });
     }
 
+    // ---- 📚 تکالیف کلاس ----
+    if (path === "/api/ms/teacher/assignments" && request.method === "GET") {
+      const cid = Number(url.searchParams.get("classId") || 0);
+      const cls = await assertClass(cid);
+      if (!cls) return jsonOut({ error: "این کلاس در اختیار شما نیست." }, 403);
+      const rows = await db
+        .prepare("SELECT * FROM ms_assignments WHERE school_id = ? AND class_id = ? ORDER BY id DESC")
+        .bind(schoolId, cid)
+        .all();
+      const out: any[] = [];
+      for (const a of (rows.results || []) as any[]) {
+        const cnt = (await db
+          .prepare("SELECT COUNT(*) c, SUM(CASE WHEN reviewed_at != '' THEN 1 ELSE 0 END) r FROM ms_submissions WHERE assignment_id = ?")
+          .bind(Number(a.id))
+          .first()) as any;
+        out.push({
+          id: Number(a.id),
+          title: a.title,
+          description: a.description,
+          dueDate: a.due_date || "",
+          subject: a.subject,
+          createdAt: String(a.created_at || "").split("T")[0],
+          submissionCount: Number(cnt?.c || 0),
+          reviewedCount: Number(cnt?.r || 0),
+        });
+      }
+      return jsonOut({ assignments: out });
+    }
+
+    if (path === "/api/ms/teacher/assignments" && request.method === "POST") {
+      const body = (await request.json().catch(() => ({}))) as any;
+      const cid = Number(body.classId || 0);
+      const cls = await assertClass(cid);
+      if (!cls) return jsonOut({ error: "این کلاس در اختیار شما نیست." }, 403);
+      const title = String(body.title || "").trim();
+      if (title.length < 2) return jsonOut({ error: "عنوان تکلیف کوتاه است." }, 400);
+      const r = await db
+        .prepare(
+          "INSERT INTO ms_assignments (school_id, class_id, teacher_id, subject, title, description, due_date, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+        )
+        .bind(schoolId, cid, tId, subs[String(cid)], title, String(body.description || "").trim(), String(body.dueDate || "").trim(), nowIso())
+        .run();
+      return jsonOut({ ok: true, id: Number(r.meta?.last_row_id || 0) });
+    }
+
+    if (path === "/api/ms/teacher/assignments/delete" && request.method === "POST") {
+      const body = (await request.json().catch(() => ({}))) as any;
+      const id = Number(body.id || 0);
+      const a = await db.prepare("SELECT * FROM ms_assignments WHERE id = ? AND school_id = ?").bind(id, schoolId).first();
+      if (!a) return jsonOut({ error: "تکلیف یافت نشد." }, 404);
+      const cls = await assertClass(Number(a.class_id));
+      if (!cls) return jsonOut({ error: "این کلاس در اختیار شما نیست." }, 403);
+      await db.prepare("DELETE FROM ms_submissions WHERE assignment_id = ?").bind(id).run();
+      await db.prepare("DELETE FROM ms_assignments WHERE id = ? AND school_id = ?").bind(id, schoolId).run();
+      return jsonOut({ ok: true });
+    }
+
+    if (path === "/api/ms/teacher/submissions" && request.method === "GET") {
+      const aid = Number(url.searchParams.get("assignmentId") || 0);
+      const a: any = await db.prepare("SELECT * FROM ms_assignments WHERE id = ? AND school_id = ?").bind(aid, schoolId).first();
+      if (!a) return jsonOut({ error: "تکلیف یافت نشد." }, 404);
+      const cls = await assertClass(Number(a.class_id));
+      if (!cls) return jsonOut({ error: "این کلاس در اختیار شما نیست." }, 403);
+      const roster = await db
+        .prepare("SELECT id, name FROM ms_students WHERE school_id = ? AND class_id = ? ORDER BY name")
+        .bind(schoolId, Number(a.class_id))
+        .all();
+      const subsRows = await db
+        .prepare("SELECT * FROM ms_submissions WHERE assignment_id = ?")
+        .bind(aid)
+        .all();
+      const subMap: Record<number, any> = {};
+      for (const s of (subsRows.results || []) as any[]) subMap[Number(s.student_id)] = s;
+      return jsonOut({
+        assignment: { id: Number(a.id), title: a.title, description: a.description, dueDate: a.due_date || "", subject: a.subject },
+        submissions: (roster.results || []).map((st: any) => {
+          const s = subMap[Number(st.id)];
+          return {
+            submissionId: s ? Number(s.id) : 0,
+            studentId: Number(st.id),
+            name: st.name,
+            submitted: Boolean(s),
+            text: s ? s.text : "",
+            photo: s ? s.photo_b64 || "" : "",
+            late: s ? Number(s.late) === 1 : false,
+            score: s && s.score !== null && s.score !== undefined ? Number(s.score) : null,
+            feedback: s ? s.feedback || "" : "",
+            reviewed: s ? Boolean(s.reviewed_at) : false,
+            createdAt: s ? String(s.created_at || "").split("T")[0] : "",
+          };
+        }),
+      });
+    }
+
+    if (path === "/api/ms/teacher/review" && request.method === "POST") {
+      const body = (await request.json().catch(() => ({}))) as any;
+      const sid = Number(body.submissionId || 0);
+      const s: any = await db.prepare("SELECT * FROM ms_submissions WHERE id = ? AND school_id = ?").bind(sid, schoolId).first();
+      if (!s) return jsonOut({ error: "تکلیفی از دانش‌آموز یافت نشد." }, 404);
+      const a: any = await db.prepare("SELECT * FROM ms_assignments WHERE id = ?").bind(Number(s.assignment_id)).first();
+      if (!a) return jsonOut({ error: "تکلیف یافت نشد." }, 404);
+      const cls = await assertClass(Number(a.class_id));
+      if (!cls) return jsonOut({ error: "این کلاس در اختیار شما نیست." }, 403);
+      const score = Number(body.score);
+      if (!isFinite(score)) return jsonOut({ error: "نمره معتبر وارد کنید." }, 400);
+      await db
+        .prepare("UPDATE ms_submissions SET score = ?, feedback = ?, reviewed_at = ? WHERE id = ?")
+        .bind(score, String(body.feedback || "").trim(), nowIso(), sid)
+        .run();
+      return jsonOut({ ok: true });
+    }
+
     if (path === "/api/ms/announce" && request.method === "POST") {
       const body = (await request.json().catch(() => ({}))) as any;
       const title = String(body.title || "").trim();
@@ -1184,6 +1331,91 @@ export async function handleMultiSchoolRequest(
     }
   }
 
+  // ==================== 📚 تکالیف دانش‌آموز / والدین ====================
+  if (path === "/api/ms/student/assignments" && request.method === "GET") {
+    if (!isStudent && !isParent) return jsonOut({ error: "غیرمجاز" }, 403);
+    const stId = Number(tok.studentId || 0);
+    const st: any = await db.prepare("SELECT * FROM ms_students WHERE id = ? AND school_id = ?").bind(stId, schoolId).first();
+    if (!st) return jsonOut({ error: "دانش‌آموز یافت نشد." }, 404);
+    const rows = await db
+      .prepare("SELECT * FROM ms_assignments WHERE school_id = ? AND class_id = ? ORDER BY id DESC")
+      .bind(schoolId, Number(st.class_id))
+      .all();
+    const subsRows = await db
+      .prepare("SELECT * FROM ms_submissions WHERE student_id = ? ORDER BY id DESC")
+      .bind(stId)
+      .all();
+    const subMap: Record<number, any> = {};
+    for (const s of (subsRows.results || []) as any[]) subMap[Number(s.assignment_id)] = s;
+    return jsonOut({
+      studentName: st.name,
+      assignments: (rows.results || []).map((a: any) => {
+        const s = subMap[Number(a.id)];
+        return {
+          id: Number(a.id),
+          title: a.title,
+          description: a.description,
+          dueDate: a.due_date || "",
+          subject: a.subject,
+          createdAt: String(a.created_at || "").split("T")[0],
+          mySubmission: s
+            ? {
+                text: s.text,
+                photo: s.photo_b64 || "",
+                late: Number(s.late) === 1,
+                score: s.score !== null && s.score !== undefined ? Number(s.score) : null,
+                feedback: s.feedback || "",
+                reviewed: Boolean(s.reviewed_at),
+                createdAt: String(s.created_at || "").split("T")[0],
+              }
+            : null,
+        };
+      }),
+    });
+  }
+
+  if (path === "/api/ms/student/submit" && request.method === "POST") {
+    if (!isStudent) return jsonOut({ error: "فقط دانش‌آموز می‌تواند تکلیف ارسال کند." }, 403);
+    const body = (await request.json().catch(() => ({}))) as any;
+    const aid = Number(body.assignmentId || 0);
+    const a: any = await db.prepare("SELECT * FROM ms_assignments WHERE id = ? AND school_id = ?").bind(aid, schoolId).first();
+    if (!a) return jsonOut({ error: "تکلیف یافت نشد." }, 404);
+    const stId = Number(tok.studentId || 0);
+    const st: any = await db
+      .prepare("SELECT * FROM ms_students WHERE id = ? AND school_id = ? AND class_id = ?")
+      .bind(stId, schoolId, Number(a.class_id))
+      .first();
+    if (!st) return jsonOut({ error: "این تکلیف برای کلاس شما نیست." }, 403);
+    const text = String(body.text || "").trim();
+    let photo = String(body.photo || "").trim();
+    if (photo && (!photo.startsWith("data:image/") || photo.length > 900000)) {
+      return jsonOut({ error: "حجم یا نوع تصویر نامعتبر است (حداکثر ۷۰۰ کیلوبایت)." }, 400);
+    }
+    if (!text && !photo) return jsonOut({ error: "متن یا تصویر تکلیف را وارد کنید." }, 400);
+    const existing: any = await db
+      .prepare("SELECT * FROM ms_submissions WHERE assignment_id = ? AND student_id = ?")
+      .bind(aid, stId)
+      .first();
+    if (existing && existing.reviewed_at) {
+      return jsonOut({ error: "این تکلیف توسط معلم تصحیح شده و دیگر قابل ویرایش نیست." }, 400);
+    }
+    const late = a.due_date && todayStr() > String(a.due_date) ? 1 : 0;
+    if (existing) {
+      await db
+        .prepare("UPDATE ms_submissions SET text = ?, photo_b64 = ?, late = ?, created_at = ? WHERE id = ?")
+        .bind(text, photo || String(existing.photo_b64 || ""), late, nowIso(), Number(existing.id))
+        .run();
+    } else {
+      await db
+        .prepare(
+          "INSERT INTO ms_submissions (school_id, assignment_id, student_id, class_id, text, photo_b64, late, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+        )
+        .bind(schoolId, aid, stId, Number(a.class_id), text, photo, late, nowIso())
+        .run();
+    }
+    return jsonOut({ ok: true, late: late === 1 });
+  }
+
   // ==================== اطلاعیه‌ها (خواندن برای همه نقش‌های مدرسه) ====================
   if (path === "/api/ms/announcements" && request.method === "GET") {
     let rows: any[];
@@ -1231,6 +1463,28 @@ export async function handleMultiSchoolRequest(
       .bind(schoolId, cid, audience, title, text, schoolRow.admin_name || "مدیر مدرسه", nowIso())
       .run();
     return jsonOut({ ok: true });
+  }
+
+  // ==================== 🤖 پرسش و پاسخ هوش مصنوعی + کوییز هوشمند ====================
+  if (path === "/api/ms/ai/ask" && request.method === "POST") {
+    if (!deps.askAI) return jsonOut({ error: "سرویس هوش مصنوعی در دسترس نیست." }, 503);
+    const body = (await request.json().catch(() => ({}))) as any;
+    const question = String(body.question || "").trim();
+    if (question.length < 2) return jsonOut({ error: "سوال خود را بنویسید." }, 400);
+    const res = await deps.askAI(question);
+    if (typeof res === "string") return jsonOut({ answer: res, photoUrl: "" });
+    return jsonOut({ answer: (res as any)?.text || "پاسخی دریافت نشد.", photoUrl: (res as any)?.photoUrl || "" });
+  }
+
+  if (path === "/api/ms/ai/quiz" && request.method === "POST") {
+    if (!deps.generateQuiz) return jsonOut({ error: "سرویس هوش مصنوعی در دسترس نیست." }, 503);
+    const body = (await request.json().catch(() => ({}))) as any;
+    const topic = String(body.topic || "").trim();
+    if (topic.length < 2) return jsonOut({ error: "موضوع کوییز را بنویسید." }, 400);
+    const count = Math.min(Math.max(Number(body.count || 3), 1), 5);
+    const q = await deps.generateQuiz(topic, count);
+    if (typeof q === "string") return jsonOut({ error: q }, 502);
+    return jsonOut({ questions: q });
   }
 
   // ==================== آمار اتاق‌های زنده ====================

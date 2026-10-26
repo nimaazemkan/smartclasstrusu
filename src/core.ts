@@ -10897,6 +10897,8 @@ async function handleAppRequest(
       signToken,
       verifyToken,
       normalizeDigits: core.normalizeDigits,
+      askAI: async (question) => await core.askAI(env, question),
+      generateQuiz: async (topic, count) => await generateMultipleQuizzesWithAI(env, topic, count),
     });
     if (msRes) return msRes;
   }

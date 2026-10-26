@@ -259,21 +259,23 @@ const SCHOOL_JS = String.raw`
     var NAVS = {
       student: [
         { id: "home", icon: "🏠", label: "خانه" },
+        { id: "hw", icon: "📚", label: "تکالیف" },
         { id: "live", icon: "🎥", label: "کلاس آنلاین" },
         { id: "report", icon: "📊", label: "کارنامه من" },
         { id: "announce", icon: "📢", label: "اطلاعیه‌ها" }
       ],
       parent: [
         { id: "home", icon: "🏠", label: "خانه" },
+        { id: "hw", icon: "📚", label: "تکالیف" },
         { id: "report", icon: "📊", label: "کارنامه فرزندم" },
         { id: "announce", icon: "📢", label: "اطلاعیه‌ها" }
       ],
       teacher: [
         { id: "home", icon: "👥", label: "کلاس من" },
+        { id: "hw", icon: "📚", label: "تکالیف" },
         { id: "att", icon: "✅", label: "حضورورغیاب" },
         { id: "grades", icon: "📝", label: "نمرات" },
-        { id: "live", icon: "🎥", label: "کلاس آنلاین" },
-        { id: "announce", icon: "📢", label: "اطلاعیه" }
+        { id: "live", icon: "🎥", label: "کلاس آنلاین" }
       ],
       admin: [
         { id: "home", icon: "🏠", label: "داشبورد" },
@@ -383,6 +385,14 @@ const SCHOOL_JS = String.raw`
             '</div>' +
             '<div class="section-title">📚 درس‌های من</div>' +
             '<div class="stat-grid">' + subjHtml + '</div>' +
+            '<div class="card" style="margin-top:12px;">' +
+              '<div class="section-title">⚡ آموزش هوشمند</div>' +
+              '<div style="display:flex;flex-wrap:wrap;gap:8px;">' +
+                '<button class="btn btn-sm" onclick="activeTab=\'ai\';renderApp()">🤖 پرسش و پاسخ هوشمند</button>' +
+                '<button class="btn btn-emerald btn-sm" onclick="activeTab=\'quiz\';renderApp()">📝 کوییز هوشمند</button>' +
+                '<button class="btn btn-ghost btn-sm" onclick="activeTab=\'hw\';renderApp()">📚 تکالیف من</button>' +
+              '</div>' +
+            '</div>' +
             (session.role === "student"
               ? '<div class="card" style="margin-top:12px;">' +
                   '<div class="section-title">🔑 کدهای اختصاصی من</div>' +
@@ -413,6 +423,15 @@ const SCHOOL_JS = String.raw`
             '<div class="card"><table class="table"><thead><tr><th>تاریخ</th><th>وضعیت</th></tr></thead><tbody>' + attHtml + '</tbody></table></div>' +
             '<div class="section-title">🏅 امتیازات رفتاری</div>' +
             '<div class="card"><table class="table"><thead><tr><th>امتیاز</th><th>دلیل</th><th>تاریخ</th></tr></thead><tbody>' + ptsHtml + '</tbody></table></div>';
+        } else if (activeTab === "hw") {
+          await renderStudentHw(main);
+          return;
+        } else if (activeTab === "ai") {
+          renderAiPanel(main);
+          return;
+        } else if (activeTab === "quiz") {
+          renderQuizPanel(main);
+          return;
         } else if (activeTab === "announce") {
           renderAnnounceList(main);
           return;
@@ -498,7 +517,9 @@ const SCHOOL_JS = String.raw`
               '<div style="display:flex;flex-wrap:wrap;gap:8px;">' +
                 '<button class="btn btn-emerald btn-sm" onclick="goTab(\'att\')">✅ حضور و غیاب امروز</button>' +
                 '<button class="btn btn-sm" onclick="goTab(\'grades\')">📝 ثبت نمره</button>' +
+                '<button class="btn btn-sm" onclick="goTab(\'hw\')">📚 تکالیف</button>' +
                 '<button class="btn btn-ghost btn-sm" onclick="goTab(\'live\')">🎥 شروع کلاس آنلاین</button>' +
+                '<button class="btn btn-ghost btn-sm" onclick="activeTab=\'announce\';renderApp()">📢 اطلاعیه</button>' +
               '</div>' +
             '</div>';
         } else if (activeTab === "att") {
@@ -546,6 +567,9 @@ const SCHOOL_JS = String.raw`
                 }).join("")
               : '<tr><td colspan="3" class="muted">هنوز نمره‌ای ثبت نشده است.</td></tr>') +
             '</tbody></table></div>';
+        } else if (activeTab === "hw") {
+          await renderTeacherHw(main);
+          return;
         } else if (activeTab === "announce") {
           renderAnnounceForm(main);
           return;
@@ -1093,6 +1117,320 @@ const SCHOOL_JS = String.raw`
         showToast("✅ سقف‌ها به‌روزرسانی شد.");
         renderApp();
       } catch (e) { showToast("❌ " + e.message); }
+    }
+
+    // ==================== 📚 تکالیف + 🤖 هوش مصنوعی + 📝 کوییز ====================
+    var hwView = { assignmentId: 0 };
+    var hwPhotos = {};
+    var aiHistory = [];
+    var quizState = { topic: "", questions: [], answers: [] };
+
+    function backBtnHtml() {
+      return '<div style="text-align:center;margin:12px 0;">' +
+        '<button class="btn btn-ghost btn-sm" onclick="activeTab=\'home\';renderApp()">🔙 بازگشت به خانه</button></div>';
+    }
+
+    function viewPhoto(src) {
+      if (!src) return;
+      var ov = document.getElementById("photoOverlay");
+      if (!ov) {
+        ov = document.createElement("div");
+        ov.id = "photoOverlay";
+        ov.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,0.92);z-index:5000;display:flex;align-items:center;justify-content:center;cursor:pointer;";
+        ov.onclick = function () { ov.style.display = "none"; };
+        document.body.appendChild(ov);
+      }
+      ov.innerHTML = '<div style="text-align:center;"><img src="' + src + '" style="max-width:96%;max-height:86vh;border-radius:12px;"/><div class="muted" style="margin-top:8px;">برای بستن، کلیک کنید</div></div>';
+      ov.style.display = "flex";
+    }
+
+    function pickHwPhoto(aid, input) {
+      var f = input.files && input.files[0];
+      if (!f) return;
+      var reader = new FileReader();
+      reader.onload = function (e) {
+        var img = new Image();
+        img.onload = function () {
+          var max = 1024;
+          var w = img.width, h = img.height;
+          if (w > max || h > max) {
+            var k = Math.min(max / w, max / h);
+            w = Math.round(w * k); h = Math.round(h * k);
+          }
+          var cv = document.createElement("canvas");
+          cv.width = w; cv.height = h;
+          cv.getContext("2d").drawImage(img, 0, 0, w, h);
+          hwPhotos[aid] = cv.toDataURL("image/jpeg", 0.72);
+          var pv = document.getElementById("hwPrev_" + aid);
+          if (pv) { pv.src = hwPhotos[aid]; pv.style.display = "inline-block"; }
+          showToast("📷 تصویر آماده ارسال است");
+        };
+        img.src = e.target.result;
+      };
+      reader.readAsDataURL(f);
+    }
+
+    async function renderStudentHw(main) {
+      main.innerHTML = '<div class="card" style="text-align:center;">⏳ در حال دریافت تکالیف...</div>';
+      try {
+        var d = await api("/api/ms/student/assignments");
+        var list = d.assignments || [];
+        if (!list.length) {
+          main.innerHTML = '<div class="card" style="text-align:center;">📭 هنوز تکلیفی برای کلاس شما ثبت نشده است.</div>' + backBtnHtml();
+          return;
+        }
+        main.innerHTML =
+          '<div class="section-title">📚 تکالیف کلاس' + (d.studentName ? ' — ' + esc(d.studentName) : '') + '</div>' +
+          list.map(function (a) {
+            var sub = a.mySubmission;
+            var statusHtml = "";
+            if (sub) {
+              if (sub.reviewed) {
+                statusHtml = '<div style="margin:8px 0;padding:9px 11px;border-radius:11px;background:rgba(16,185,129,0.13);border:1px solid rgba(16,185,129,0.4);">' +
+                  '✅ تصحیح شد — نمره: <b>' + sub.score + '</b>' +
+                  (sub.feedback ? '<div style="margin-top:4px;font-size:12.5px;">💬 ' + esc(sub.feedback) + '</div>' : '') +
+                '</div>';
+              } else {
+                statusHtml = '<div style="margin:8px 0;padding:9px 11px;border-radius:11px;background:rgba(245,158,11,0.12);border:1px solid rgba(245,158,11,0.4);">⏳ ارسال شد — منتظر تصحیح معلم' + (sub.late ? ' (با تأخیر)' : '') + '</div>';
+              }
+            }
+            var formHtml = "";
+            if (session.role === "student" && (!sub || !sub.reviewed)) {
+              formHtml =
+                '<textarea id="hwText_' + a.id + '" class="input" rows="3" placeholder="متن تکلیف یا جواب سوالات...">' + esc(sub ? sub.text : "") + '</textarea>' +
+                '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">' +
+                  '<label class="btn btn-ghost btn-sm" style="cursor:pointer;">📷 انتخاب عکس<input type="file" accept="image/*" style="display:none;" onchange="pickHwPhoto(' + a.id + ', this)" /></label>' +
+                  '<img id="hwPrev_' + a.id + '" src="" style="display:' + (sub && sub.photo ? "inline-block" : "none") + ';width:64px;height:64px;object-fit:cover;border-radius:9px;border:1px solid var(--border);cursor:pointer;" onclick="viewPhoto(this.src)" />' +
+                  '<button class="btn btn-emerald btn-sm" style="margin-right:auto;" onclick="submitHw(' + a.id + ')">📤 ' + (sub ? "ویرایش ارسال" : "ارسال تکلیف") + '</button>' +
+                '</div>';
+              if (sub && sub.photo) {
+                formHtml = formHtml.replace('src=""', 'src="' + sub.photo + '"');
+              }
+            } else if (sub && sub.photo) {
+              formHtml = '<img src="' + sub.photo + '" style="width:100%;max-height:220px;object-fit:contain;border-radius:11px;cursor:pointer;" onclick="viewPhoto(this.src)" />';
+            }
+            return '<div class="card">' +
+              '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">' +
+                '<b>📌 ' + esc(a.title) + '</b>' +
+                '<span class="badge-pill" style="background:rgba(99,102,241,0.18);color:#C7D2FE;">' + esc(a.subject || "درس") + '</span>' +
+              '</div>' +
+              (a.description ? '<div class="muted" style="font-size:12.5px;margin:6px 0;">' + esc(a.description) + '</div>' : '') +
+              '<div class="muted" style="font-size:11.5px;">🗓 ثبت: ' + esc(a.createdAt) + (a.dueDate ? ' • مهلت: ' + esc(a.dueDate) : '') + '</div>' +
+              statusHtml + formHtml +
+            '</div>';
+          }).join("") +
+          backBtnHtml();
+      } catch (e) {
+        main.innerHTML = '<div class="card">❌ ' + esc(e.message) + '</div>';
+      }
+    }
+
+    async function submitHw(aid) {
+      try {
+        var txt = (document.getElementById("hwText_" + aid) || {}).value || "";
+        await api("/api/ms/student/submit", { assignmentId: aid, text: txt.trim(), photo: hwPhotos[aid] || "" });
+        hwPhotos[aid] = "";
+        showToast("✅ تکلیف ارسال شد.");
+        renderApp();
+      } catch (e) { showToast("❌ " + e.message); }
+    }
+
+    async function renderTeacherHw(main) {
+      main.innerHTML = '<div class="card" style="text-align:center;">⏳ ...</div>';
+      try {
+        if (!msData) await ensureHome();
+        resolveSelClass();
+        if (hwView.assignmentId) {
+          var d = await api("/api/ms/teacher/submissions?assignmentId=" + hwView.assignmentId);
+          main.innerHTML =
+            classSwitcherHtml() +
+            '<div class="section-title">📥 تکالیف ارسالی — ' + esc(d.assignment.title) + '</div>' +
+            '<div style="text-align:right;margin-bottom:10px;"><button class="btn btn-ghost btn-sm" onclick="hwView.assignmentId=0;renderApp()">🔙 بازگشت به لیست تکالیف</button></div>' +
+            (d.submissions || []).map(function (s) {
+              if (!s.submitted) {
+                return '<div class="card"><b>' + esc(s.name) + '</b><div class="muted" style="font-size:12px;">❌ تکلیف ارسال نکرده است</div></div>';
+              }
+              return '<div class="card">' +
+                '<b>' + esc(s.name) + '</b>' +
+                (s.late ? ' <span class="badge-pill" style="background:rgba(245,158,11,0.2);color:#FCD34D;">با تأخیر</span>' : '') +
+                (s.reviewed ? ' <span class="badge-pill" style="background:rgba(16,185,129,0.2);color:#6EE7B7;">تصحیح شد</span>' : '') +
+                (s.text ? '<div style="margin:7px 0;padding:9px 11px;background:var(--surface-2);border-radius:11px;font-size:13px;">' + esc(s.text) + '</div>' : '') +
+                (s.photo ? '<img src="' + s.photo + '" style="width:100%;max-height:230px;object-fit:contain;border-radius:11px;cursor:pointer;margin:6px 0;" onclick="viewPhoto(this.src)" />' : '') +
+                '<div style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap;">' +
+                  '<input id="revScore_' + s.submissionId + '" class="input" type="number" step="0.25" dir="ltr" placeholder="نمره" style="width:95px;margin:0;" value="' + (s.score !== null ? s.score : "") + '" />' +
+                  '<input id="revFb_' + s.submissionId + '" class="input" placeholder="بازخورد معلم..." style="flex:1;min-width:150px;margin:0;" value="' + esc(s.feedback) + '" />' +
+                  '<button class="btn btn-emerald btn-sm" onclick="saveReview(' + s.submissionId + ')">✅ ثبت</button>' +
+                '</div>' +
+              '</div>';
+            }).join("") +
+            backBtnHtml();
+          return;
+        }
+        var list = await api("/api/ms/teacher/assignments?classId=" + selClassId);
+        main.innerHTML =
+          classSwitcherHtml() +
+          '<div class="card">' +
+            '<div class="section-title">➕ تکلیف جدید</div>' +
+            '<input id="asgTitle" class="input" placeholder="عنوان تکلیف (مثلاً تمرین صفحه ۴۵)" />' +
+            '<textarea id="asgDesc" class="input" rows="3" placeholder="توضیحات و سوالات..."></textarea>' +
+            '<input id="asgDue" class="input" type="date" dir="ltr" placeholder="مهلت ارسال (اختیاری)" />' +
+            '<button class="btn btn-emerald" onclick="createAssignment()">📤 ثبت تکلیف برای کلاس</button>' +
+          '</div>' +
+          '<div class="section-title">📚 تکالیف ثبت‌شده</div>' +
+          ((list.assignments || []).length
+            ? list.assignments.map(function (a) {
+                return '<div class="card" style="cursor:pointer;" onclick="hwView.assignmentId=' + a.id + ';renderApp()">' +
+                  '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">' +
+                    '<b>📌 ' + esc(a.title) + '</b>' +
+                    '<span class="badge-pill" style="background:rgba(99,102,241,0.18);color:#C7D2FE;">' + a.submissionCount + ' ارسال / ' + a.reviewedCount + ' تصحیح</span>' +
+                  '</div>' +
+                  (a.dueDate ? '<div class="muted" style="font-size:11.5px;">🗓 مهلت: ' + esc(a.dueDate) + '</div>' : '') +
+                  '<div style="margin-top:7px;display:flex;gap:6px;">' +
+                    '<button class="btn btn-sm" onclick="event.stopPropagation();hwView.assignmentId=' + a.id + ';renderApp()">📥 بررسی تکالیف</button>' +
+                    '<button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();delAssignment(' + a.id + ')">🗑</button>' +
+                  '</div>' +
+                '</div>';
+              }).join("")
+            : '<div class="card"><div class="muted">هنوز تکلیفی ثبت نشده است.</div></div>') +
+          backBtnHtml();
+      } catch (e) {
+        main.innerHTML = '<div class="card">❌ ' + esc(e.message) + '</div>';
+      }
+    }
+
+    async function createAssignment() {
+      try {
+        var title = document.getElementById("asgTitle").value.trim();
+        if (!title) return showToast("عنوان تکلیف را بنویسید");
+        await api("/api/ms/teacher/assignments", {
+          classId: selClassId,
+          title: title,
+          description: document.getElementById("asgDesc").value.trim(),
+          dueDate: document.getElementById("asgDue").value
+        });
+        showToast("✅ تکلیف برای کلاس ثبت شد.");
+        renderApp();
+      } catch (e) { showToast("❌ " + e.message); }
+    }
+
+    async function delAssignment(id) {
+      if (!confirm("این تکلیف و همه ارسال‌های آن حذف شود؟")) return;
+      try {
+        await api("/api/ms/teacher/assignments/delete", { id: id });
+        showToast("🗑 حذف شد.");
+        renderApp();
+      } catch (e) { showToast("❌ " + e.message); }
+    }
+
+    async function saveReview(submissionId) {
+      try {
+        var score = Number(document.getElementById("revScore_" + submissionId).value);
+        if (!isFinite(score)) return showToast("نمره را وارد کنید");
+        await api("/api/ms/teacher/review", {
+          submissionId: submissionId,
+          score: score,
+          feedback: document.getElementById("revFb_" + submissionId).value.trim()
+        });
+        showToast("✅ نمره و بازخورد ثبت شد.");
+        renderApp();
+      } catch (e) { showToast("❌ " + e.message); }
+    }
+
+    // ---- 🤖 پرسش و پاسخ هوشمند ----
+    function renderAiPanel(main) {
+      main.innerHTML =
+        '<div class="section-title">🤖 پرسش و پاسخ هوشمند</div>' +
+        '<div class="card">' +
+          '<p class="muted" style="margin-top:0;">هر سوال درسی‌تان را بپرسید؛ دستیار هوش مصنوعی پاسخ کامل فارسی می‌دهد.</p>' +
+          (aiHistory.length
+            ? aiHistory.map(function (h) {
+                return '<div style="margin-bottom:10px;">' +
+                  '<div style="background:rgba(99,102,241,0.16);padding:9px 12px;border-radius:12px 12px 3px 12px;margin-bottom:6px;"><b>🙋 شما:</b> ' + esc(h.q) + '</div>' +
+                  '<div style="background:var(--surface-2);padding:9px 12px;border-radius:12px 12px 12px 3px;white-space:pre-wrap;font-size:13px;">🤖 ' + esc(h.a) + '</div>' +
+                  (h.photo ? '<img src="' + h.photo + '" style="max-width:100%;border-radius:11px;margin-top:6px;cursor:pointer;" onclick="viewPhoto(this.src)" />' : '') +
+                '</div>';
+              }).join("")
+            : "") +
+          '<textarea id="aiQ" class="input" rows="3" placeholder="سوالتان را بنویسید... (مثلاً: علت رنگین کمان چیست؟)"></textarea>' +
+          '<button class="btn" onclick="askAiNow()">✨ پرسیدن از هوش مصنوعی</button>' +
+        '</div>' +
+        backBtnHtml();
+    }
+
+    async function askAiNow() {
+      var q = (document.getElementById("aiQ") || {}).value || "";
+      q = q.trim();
+      if (!q) return showToast("اول سوالتان را بنویسید");
+      aiHistory.push({ q: q, a: "⏳ در حال فکر کردن...", photo: "" });
+      renderApp();
+      try {
+        var r = await api("/api/ms/ai/ask", { question: q });
+        aiHistory[aiHistory.length - 1] = { q: q, a: r.answer || "پاسخی دریافت نشد.", photo: r.photoUrl || "" };
+      } catch (e) {
+        aiHistory[aiHistory.length - 1] = { q: q, a: "❌ " + e.message, photo: "" };
+      }
+      renderApp();
+    }
+
+    // ---- 📝 کوییز هوشمند ----
+    function renderQuizPanel(main) {
+      if (!quizState.questions.length) {
+        main.innerHTML =
+          '<div class="section-title">📝 کوییز هوشمند</div>' +
+          '<div class="card">' +
+            '<p class="muted" style="margin-top:0;">موضوع درسی را بنویسید تا هوش مصنوعی برایتان طرح سوال چهارگزینه‌ای بسازد:</p>' +
+            '<input id="quizTopic" class="input" placeholder="مثلاً: کسرها، انقلاب اسلامی، سلول گیاهی..." />' +
+            '<button class="btn btn-emerald" onclick="makeQuiz()">✨ ساخت کوییز</button>' +
+          '</div>' +
+          backBtnHtml();
+        return;
+      }
+      var score = 0, answered = 0;
+      main.innerHTML =
+        '<div class="section-title">📝 کوییز «' + esc(quizState.topic) + '»</div>' +
+        quizState.questions.map(function (q, qi) {
+          var myAns = quizState.answers[qi];
+          var corr = Math.min(Math.max(Math.round(q.correct), 1), 4) - 1;
+          if (myAns !== undefined) { answered++; if (myAns === corr) score++; }
+          return '<div class="card">' +
+            '<b>' + (qi + 1) + '. ' + esc(q.question) + '</b>' +
+            '<div style="margin-top:9px;display:grid;gap:7px;">' +
+              (q.options || []).map(function (opt, oi) {
+                var st = "";
+                if (myAns !== undefined) {
+                  if (oi === corr) st = "background:rgba(16,185,129,0.22);border-color:rgba(16,185,129,0.6);";
+                  else if (oi === myAns) st = "background:rgba(244,63,94,0.2);border-color:rgba(244,63,94,0.55);";
+                }
+                return '<button class="btn btn-ghost" style="text-align:right;' + st + '" onclick="answerQuiz(' + qi + ',' + oi + ')">' + esc(opt) + '</button>';
+              }).join("") +
+            '</div>' +
+          '</div>';
+        }).join("") +
+        (answered === quizState.questions.length
+          ? '<div class="card" style="text-align:center;border-color:rgba(245,158,11,0.5);"><div style="font-size:22px;">🏆</div><b>نتیجه: ' + score + ' از ' + quizState.questions.length + '</b>' +
+            '<div style="margin-top:9px;display:flex;gap:8px;justify-content:center;">' +
+              '<button class="btn btn-sm" onclick="quizState={topic:\'\',questions:[],answers:[]};renderApp()">🔄 کوییز جدید</button>' +
+            '</div></div>'
+          : "") +
+        backBtnHtml();
+    }
+
+    async function makeQuiz() {
+      var topic = (document.getElementById("quizTopic") || {}).value || "";
+      topic = topic.trim();
+      if (!topic) return showToast("موضوع کوییز را بنویسید");
+      showToast("⏳ هوش مصنوعی در حال طراحی سوالات...");
+      try {
+        var r = await api("/api/ms/ai/quiz", { topic: topic, count: 3 });
+        quizState = { topic: topic, questions: r.questions || [], answers: [] };
+        renderApp();
+      } catch (e) { showToast("❌ " + e.message); }
+    }
+
+    function answerQuiz(qi, oi) {
+      if (quizState.answers[qi] !== undefined) return;
+      quizState.answers[qi] = oi;
+      renderApp();
     }
 
     // ==================== اطلاعیه‌ها ====================

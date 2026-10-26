@@ -1,6 +1,8 @@
 import type { D1Database } from "./turso-d1";
 import { Bot, Context, webhookCallback, InputFile, Keyboard, InlineKeyboard } from "grammy";
 import * as jalaali from "jalaali-js";
+import { handleLiveClassRequest, getLiveRoomPublicStatus } from "./live-class";
+import { LIVE_CLASS_CSS, LIVE_CLASS_JS } from "./live-class-client";
 
 // پلی‌فیل Iterator برای سازگاری کامل unpdf در تمام نسخه‌های V8 و Node
 if (typeof (globalThis as any).Iterator === "undefined") {
@@ -8559,6 +8561,7 @@ function buildAppHtml(defaultApiBase: string = ""): string {
       background: var(--surface); border: 1px solid var(--border);
       border-radius: 18px; padding: 18px; width: 100%; max-width: 440px; max-height: 86vh; overflow-y: auto;
     }
+    ${LIVE_CLASS_CSS}
   </style>
 </head>
 <body>
@@ -8961,6 +8964,8 @@ function buildAppHtml(defaultApiBase: string = ""): string {
     }
 
     function doLogout() {
+      if (typeof stopLivePollingOnly === "function") stopLivePollingOnly();
+      if (typeof cleanupAllRtc === "function") cleanupAllRtc();
       localStorage.removeItem("sc_session");
       session = null;
       activeTab = "home";
@@ -9113,15 +9118,21 @@ function buildAppHtml(defaultApiBase: string = ""): string {
     // 🎒 ۱. پنل دانش‌آموز (Student Panel)
     // ====================================================================
     async function renderStudentPanel() {
+      if (activeTab !== "live" && typeof stopLivePollingOnly === "function") stopLivePollingOnly();
       document.getElementById("headerSub").textContent = "🎒 پنل دانش‌آموز: " + session.name;
       setNav([
         { id: "home", icon: "🏠", label: "خانه" },
+        { id: "live", icon: "🎥", label: "کلاس آنلاین" },
         { id: "qa", icon: "❓", label: "پرسش AI" },
         { id: "lab", icon: "🧠", label: "کارگاه" },
         { id: "arena", icon: "🎮", label: "رقابت" },
         { id: "history", icon: "📜", label: "سوابق" },
       ]);
       const main = document.getElementById("mainView");
+      if (activeTab === "live") {
+        await renderLiveClassroomPanel(main);
+        return;
+      }
       main.innerHTML = '<div class="card" style="text-align:center;">⏳ در حال بارگذاری اطلاعات...</div>';
 
       try {
@@ -9141,6 +9152,7 @@ function buildAppHtml(defaultApiBase: string = ""): string {
       const pct = d.nextLevel ? Math.min(100, Math.round((st.score / d.nextLevel.minScore) * 100)) : 100;
 
       main.innerHTML = \`
+        \${renderLiveBannerHtml(d.liveClass)}
         <div class="card hero-card">
           <div style="display:flex;justify-content:space-between;align-items:center;">
             <div>
@@ -9991,9 +10003,11 @@ function buildAppHtml(defaultApiBase: string = ""): string {
     let teacherSubTool = "qa";
     let teacherQaHistory = [];
     async function renderTeacherPanel() {
+      if (activeTab !== "live" && typeof stopLivePollingOnly === "function") stopLivePollingOnly();
       document.getElementById("headerSub").textContent = "👨‍🏫 اتاق فرمان معلم";
       setNav([
         { id: "dash", icon: "📊", label: "داشبورد" },
+        { id: "live", icon: "🎥", label: "کلاس آنلاین" },
         { id: "inbox", icon: "📥", label: "صندوق تایید" },
         { id: "att", icon: "✅", label: "حضوروغیاب" },
         { id: "ai", icon: "🤖", label: "ابزار هوش" },
@@ -10001,12 +10015,17 @@ function buildAppHtml(defaultApiBase: string = ""): string {
         { id: "pchat", icon: "💬", label: "پیام اولیا" },
       ]);
       const main = document.getElementById("mainView");
+      if (activeTab === "live") {
+        await renderLiveClassroomPanel(main);
+        return;
+      }
       main.innerHTML = '<div class="card" style="text-align:center;">⏳ در حال بارگذاری پنل مدیریت...</div>';
 
       try {
         const d = await api("/api/app/teacher/overview");
         if (activeTab === "dash") {
           main.innerHTML = \`
+            \${renderLiveBannerHtml(d.liveClass)}
             \${d.legacyNotice ? \`
               <div class="card" style="border-color:var(--gold);background:rgba(245,158,11,0.12);">
                 <div style="font-weight:800;color:var(--gold-light);margin-bottom:4px;">⚠️ حالت سازگاری فعال است (سرور کلاس نیاز به آپدیت دارد)</div>
@@ -10020,7 +10039,10 @@ function buildAppHtml(defaultApiBase: string = ""): string {
                 <div class="stat-box"><div class="stat-val">\${d.pendingLab.length + d.pendingShop.length}</div><div class="stat-lbl">منتظر تایید</div></div>
                 <div class="stat-box"><div class="stat-val">\${d.unreadParentCount}</div><div class="stat-lbl">پیام جدید اولیا</div></div>
               </div>
-              <button class="btn" style="margin-top:12px;" onclick="activeTab='ai';teacherSubTool='qa';renderApp()">❓ پرسش و پاسخ از هوش مصنوعی + ۱۸ ابزار زنده</button>
+              <div class="grid-2" style="margin-top:12px;">
+                <button class="btn btn-emerald" onclick="activeTab='live';renderApp()">🎥 شروع / ورود به کلاس مجازی</button>
+                <button class="btn" onclick="activeTab='ai';teacherSubTool='qa';renderApp()">❓ پرسش و پاسخ هوش مصنوعی</button>
+              </div>
             </div>
 
             <div class="card">
@@ -10583,6 +10605,8 @@ function buildAppHtml(defaultApiBase: string = ""): string {
       renderApp();
     }
 
+    ${LIVE_CLASS_JS}
+
     if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
       navigator.serviceWorker.register("/sw.js").catch(() => {});
     }
@@ -10972,6 +10996,41 @@ async function handleAppRequest(
       }
     }
 
+    // ==================== مسیرهای اتاق کلاس مجازی زنده (/api/app/live/*) ====================
+    if (path.startsWith("/api/app/live/")) {
+      const liveRes = await handleLiveClassRequest(request, url, {
+        verifyAuth: async (req, u) => {
+          const qTok = (u.searchParams.get("t") || "").trim();
+          const hTok = (req.headers.get("Authorization") || "").replace(/^Bearer\s+/i, "").trim();
+          return await verifyToken(qTok || hTok, core.PANEL_PASSWORD);
+        },
+        getStudent: async (uid) => await core.getStudent(db, uid),
+        getAllStudents: async () => await core.getAllStudents(db),
+        markStudentPresentToday: async (uid, stName) => {
+          const todayStr = new Date().toISOString().split("T")[0];
+          await core.setAttendanceStatus(db, uid, stName, todayStr, "present");
+        },
+        notifyTelegramClassStarted: async (classTitle) => {
+          const all = await core.getAllStudents(db);
+          const bot = core.createBot(env);
+          let sent = 0;
+          for (const s of all) {
+            if (s.user_id >= 800000000) continue;
+            try {
+              await bot.api.sendMessage(
+                s.user_id,
+                `🔴 کلاس مجازی زنده شروع شد!\n\n📌 موضوع: ${classTitle}\n👨‍🏫 استاد: ${core.TEACHER_NAME}\n\nهمین الان وارد اپلیکیشن «کلاس هوشمند» ⬅️ تب «🎥 کلاس آنلاین» شوید!`
+              );
+              sent++;
+            } catch {}
+          }
+          return sent;
+        },
+        teacherName: core.TEACHER_NAME,
+      });
+      if (liveRes) return liveRes;
+    }
+
     // ==================== احراز هویت توکن برای بقیه مسیرها ====================
     const authHeader = request.headers.get("Authorization") || "";
     const rawToken = authHeader.replace(/^Bearer\s+/i, "").trim();
@@ -11012,6 +11071,7 @@ async function handleAppRequest(
           mission,
           deadlines,
           credentials,
+          liveClass: getLiveRoomPublicStatus(),
         });
       }
 
@@ -11540,6 +11600,7 @@ async function handleAppRequest(
           teams,
           parentMessages,
           unreadParentCount,
+          liveClass: getLiveRoomPublicStatus(),
         });
       }
 

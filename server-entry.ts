@@ -1,7 +1,10 @@
 import http from "node:http";
+import fs from "node:fs";
+import path from "node:path";
 import appHandler from "./api/index";
 
 const PORT = Number(process.env.PORT || 3000);
+let cachedPdfJsBuf: Buffer | null = null;
 
 const server = http.createServer(async (req, res) => {
   try {
@@ -24,6 +27,26 @@ const server = http.createServer(async (req, res) => {
       });
       res.end("ok");
       return;
+    }
+
+    // سرو مستقیم موتور رندر صفحات PDF برای وایت‌برد کلاس آنلاین (بدون نیاز به هیچ CDN خارجی یا فیلترشده)
+    if (cleanPath === "/api/app/live/pdfjs.mjs") {
+      if (!cachedPdfJsBuf) {
+        const candidate = path.resolve(process.cwd(), "node_modules/unpdf/dist/pdfjs.mjs");
+        if (fs.existsSync(candidate)) {
+          cachedPdfJsBuf = fs.readFileSync(candidate);
+        }
+      }
+      if (cachedPdfJsBuf) {
+        res.writeHead(200, {
+          "Content-Type": "application/javascript; charset=utf-8",
+          "Cache-Control": "public, max-age=604800",
+          "Access-Control-Allow-Origin": "*",
+          "Content-Length": String(cachedPdfJsBuf.length),
+        });
+        res.end(cachedPdfJsBuf);
+        return;
+      }
     }
 
     const protoHeader = req.headers["x-forwarded-proto"];

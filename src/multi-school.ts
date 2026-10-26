@@ -161,6 +161,89 @@ export async function ensureSchoolTables(db: D1Database): Promise<void> {
       )`
     )
     .run();
+  await db
+    .prepare(
+      `CREATE TABLE IF NOT EXISTS ms_missions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        school_id INTEGER NOT NULL,
+        class_id INTEGER NOT NULL,
+        student_id INTEGER NOT NULL,
+        mission TEXT NOT NULL,
+        proof TEXT DEFAULT '',
+        status TEXT DEFAULT 'open',
+        points INTEGER DEFAULT 0,
+        feedback TEXT DEFAULT '',
+        date TEXT NOT NULL,
+        created_at TEXT
+      )`
+    )
+    .run();
+  await db
+    .prepare(
+      `CREATE TABLE IF NOT EXISTS ms_lab (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        school_id INTEGER NOT NULL,
+        class_id INTEGER NOT NULL,
+        student_id INTEGER NOT NULL,
+        tool TEXT NOT NULL,
+        topic TEXT DEFAULT '',
+        summary TEXT DEFAULT '',
+        status TEXT DEFAULT 'pending',
+        points INTEGER DEFAULT 0,
+        feedback TEXT DEFAULT '',
+        created_at TEXT
+      )`
+    )
+    .run();
+  await db
+    .prepare(
+      `CREATE TABLE IF NOT EXISTS ms_shop_items (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        school_id INTEGER NOT NULL,
+        title TEXT NOT NULL,
+        cost INTEGER NOT NULL,
+        active INTEGER DEFAULT 1,
+        created_at TEXT
+      )`
+    )
+    .run();
+  await db
+    .prepare(
+      `CREATE TABLE IF NOT EXISTS ms_shop_orders (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        school_id INTEGER NOT NULL,
+        item_id INTEGER NOT NULL,
+        student_id INTEGER NOT NULL,
+        status TEXT DEFAULT 'pending',
+        created_at TEXT
+      )`
+    )
+    .run();
+  await db
+    .prepare(
+      `CREATE TABLE IF NOT EXISTS ms_library (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        school_id INTEGER NOT NULL,
+        title TEXT NOT NULL,
+        body TEXT DEFAULT '',
+        created_by TEXT DEFAULT '',
+        created_at TEXT
+      )`
+    )
+    .run();
+  await db
+    .prepare(
+      `CREATE TABLE IF NOT EXISTS ms_messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        school_id INTEGER NOT NULL,
+        class_id INTEGER NOT NULL,
+        student_id INTEGER NOT NULL,
+        from_role TEXT NOT NULL,
+        text TEXT NOT NULL,
+        created_at TEXT
+      )`
+    )
+    .run();
 }
 
 // ---------------------------------------------------------------------------
@@ -175,6 +258,7 @@ export interface MultiSchoolDeps {
   normalizeDigits: (s: string) => string;
   askAI?: (question: string) => Promise<{ text: string; photoUrl?: string } | string>;
   generateQuiz?: (topic: string, count: number) => Promise<any>;
+  aiTool?: (tool: string, payload: any) => Promise<any>;
 }
 
 const CORS_HEADERS = {
@@ -1617,6 +1701,430 @@ export async function handleMultiSchoolRequest(
       }
       return jsonOut({ ok: true, sent: rows.length });
     }
+  }
+
+  // ====================================================================
+  // 🎯🧠🛒📚 ادغام امکانات کامل نسخه قبلی (ماموریت، کارگاه، فروشگاه، کتابخانه، پیام)
+  // ====================================================================
+  const DAILY_MISSIONS_MS = [
+    "امروز ۲۰ دقیقه کتاب غیردرسی بخوان و یک جمله از آن بنویس.",
+    "یک درس از امروز را برای خانواده‌ات توضیح بده و بازخوردشان را بنویس.",
+    "۱۰ لغت جدید انگلیسی یاد بگیر و در جمله استفاده کن.",
+    "تمرین امروز ریاضی را بدون کمک حل کن و راه‌حل را عکس بگیر.",
+    "یک آزمایش علمی ساده در خانه انجام بده و گزارش کوتاه بنویس.",
+    "دست‌خط خود را ۱۵ دقیقه تمرین کن (رونویسی از یک متن زیبا).",
+    "یک خلاصه ۵ خطی از مهم‌ترین درس امروز بنویس.",
+    "به یکی از هم‌کلاسی‌هایت در یادگیری درس امروز کمک کن.",
+    "۳ سوال امتحانی از درس امروز طراحی کن و جوابش را بنویس.",
+    "امروز بدون گوشی، ۳۰ دقیقه مطالعه متمرکز داشته باش.",
+  ];
+  const isEduStudent = isStudent || isParent;
+
+  const getStudentPoints = async (sid: number): Promise<number> => {
+    const r = (await db.prepare("SELECT COALESCE(SUM(delta),0) s FROM ms_points WHERE student_id = ?").bind(sid).first()) as any;
+    return Number(r?.s || 0);
+  };
+  const getPendingOrderCost = async (sid: number): Promise<number> => {
+    const r = (await db
+      .prepare(
+        `SELECT COALESCE(SUM(i.cost),0) s FROM ms_shop_orders o JOIN ms_shop_items i ON i.id = o.item_id
+         WHERE o.student_id = ? AND o.status = 'pending'`
+      )
+      .bind(sid)
+      .first()) as any;
+    return Number(r?.s || 0);
+  };
+
+  if (path === "/api/ms/edu/home" && request.method === "GET" && isEduStudent) {
+    const stId = Number(tok.studentId || 0);
+    const st: any = await db.prepare("SELECT * FROM ms_students WHERE id = ? AND school_id = ?").bind(stId, schoolId).first();
+    if (!st) return jsonOut({ error: "دانش‌آموز یافت نشد." }, 404);
+    const today = todayStr();
+    let mission: any = await db
+      .prepare("SELECT * FROM ms_missions WHERE student_id = ? AND date = ? ORDER BY id DESC LIMIT 1")
+      .bind(stId, today)
+      .first();
+    if (!mission && isStudent) {
+      const txt = DAILY_MISSIONS_MS[Math.floor(Math.random() * DAILY_MISSIONS_MS.length)];
+      const r = await db
+        .prepare("INSERT INTO ms_missions (school_id, class_id, student_id, mission, date, created_at) VALUES (?, ?, ?, ?, ?, ?)")
+        .bind(schoolId, Number(st.class_id), stId, txt, today, nowIso())
+        .run();
+      mission = { id: Number(r.meta?.last_row_id || 0), mission: txt, proof: "", status: "open", points: 0, feedback: "", date: today };
+    }
+    const points = await getStudentPoints(stId);
+    const all = await db.prepare("SELECT id, name FROM ms_students WHERE school_id = ? ORDER BY id").bind(schoolId).all();
+    const scored: Array<{ id: number; name: string; points: number }> = [];
+    for (const s of (all.results || []) as any[]) {
+      scored.push({ id: Number(s.id), name: s.name, points: await getStudentPoints(Number(s.id)) });
+    }
+    scored.sort((a, b) => b.points - a.points);
+    const rank = scored.findIndex((x) => x.id === stId) + 1;
+    return jsonOut({
+      student: { id: stId, name: st.name },
+      mission: mission
+        ? { id: Number(mission.id), text: mission.mission, proof: mission.proof || "", status: mission.status || "open", points: Number(mission.points || 0), feedback: mission.feedback || "", date: mission.date || today }
+        : null,
+      points,
+      rank: rank || scored.length,
+      totalStudents: scored.length,
+    });
+  }
+
+  if (path === "/api/ms/edu/mission/submit" && request.method === "POST" && (isStudent || isParent || isTeacher)) {
+    if (!isStudent) return jsonOut({ error: "فقط دانش‌آموز می‌تواند گزارش بدهد." }, 403);
+    const body = (await request.json().catch(() => ({}))) as any;
+    const stId = Number(tok.studentId || 0);
+    const today = todayStr();
+    const mission: any = await db
+      .prepare("SELECT * FROM ms_missions WHERE student_id = ? AND date = ? ORDER BY id DESC LIMIT 1")
+      .bind(stId, today)
+      .first();
+    if (!mission) return jsonOut({ error: "ماموریت امروز یافت نشد." }, 404);
+    if (mission.status === "approved") return jsonOut({ error: "این ماموریت تایید شده و قابل تغییر نیست." }, 400);
+    const proof = String(body.proof || "").trim();
+    if (proof.length < 3) return jsonOut({ error: "گزارش انجام ماموریت را بنویسید." }, 400);
+    await db
+      .prepare("UPDATE ms_missions SET proof = ?, status = 'pending' WHERE id = ?")
+      .bind(proof, Number(mission.id))
+      .run();
+    return jsonOut({ ok: true });
+  }
+
+  if (path === "/api/ms/edu/lab" && request.method === "GET" && isEduStudent) {
+    const stId = Number(tok.studentId || 0);
+    const rows = await db
+      .prepare("SELECT * FROM ms_lab WHERE student_id = ? ORDER BY id DESC LIMIT 20")
+      .bind(stId)
+      .all();
+    return jsonOut({
+      items: (rows.results || []).map((l: any) => ({
+        id: Number(l.id),
+        tool: l.tool,
+        topic: l.topic,
+        summary: l.summary,
+        status: l.status,
+        points: Number(l.points || 0),
+        feedback: l.feedback || "",
+        date: String(l.created_at || "").split("T")[0],
+      })),
+    });
+  }
+
+  if (path === "/api/ms/edu/lab/submit" && request.method === "POST" && (isStudent || isParent || isTeacher)) {
+    if (!isStudent) return jsonOut({ error: "فقط دانش‌آموز می‌تواند گزارش بدهد." }, 403);
+    const body = (await request.json().catch(() => ({}))) as any;
+    const stId = Number(tok.studentId || 0);
+    const st: any = await db.prepare("SELECT * FROM ms_students WHERE id = ? AND school_id = ?").bind(stId, schoolId).first();
+    if (!st) return jsonOut({ error: "دانش‌آموز یافت نشد." }, 404);
+    const tool = String(body.tool || "").trim();
+    const summary = String(body.summary || "").trim();
+    if (!tool || summary.length < 3) return jsonOut({ error: "گزارش کوتاهی از فعالیت بنویسید." }, 400);
+    await db
+      .prepare("INSERT INTO ms_lab (school_id, class_id, student_id, tool, topic, summary, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+      .bind(schoolId, Number(st.class_id), stId, tool, String(body.topic || "").trim(), summary, nowIso())
+      .run();
+    return jsonOut({ ok: true });
+  }
+
+  if (path === "/api/ms/edu/shop" && request.method === "GET" && isEduStudent) {
+    const stId = Number(tok.studentId || 0);
+    const items = await db
+      .prepare("SELECT * FROM ms_shop_items WHERE school_id = ? AND active = 1 ORDER BY cost")
+      .bind(schoolId)
+      .all();
+    const orders = await db
+      .prepare("SELECT o.*, i.title FROM ms_shop_orders o JOIN ms_shop_items i ON i.id = o.item_id WHERE o.student_id = ? ORDER BY o.id DESC LIMIT 15")
+      .bind(stId)
+      .all();
+    const points = await getStudentPoints(stId);
+    const pendingCost = await getPendingOrderCost(stId);
+    return jsonOut({
+      points,
+      pendingCost,
+      items: (items.results || []).map((i: any) => ({ id: Number(i.id), title: i.title, cost: Number(i.cost) })),
+      orders: (orders.results || []).map((o: any) => ({
+        id: Number(o.id),
+        title: o.title,
+        status: o.status,
+        date: String(o.created_at || "").split("T")[0],
+      })),
+    });
+  }
+
+  if (path === "/api/ms/edu/shop/order" && request.method === "POST" && isStudent) {
+    const body = (await request.json().catch(() => ({}))) as any;
+    const stId = Number(tok.studentId || 0);
+    const item: any = await db
+      .prepare("SELECT * FROM ms_shop_items WHERE id = ? AND school_id = ? AND active = 1")
+      .bind(Number(body.itemId || 0), schoolId)
+      .first();
+    if (!item) return jsonOut({ error: "جایزه یافت نشد." }, 404);
+    const points = await getStudentPoints(stId);
+    const pending = await getPendingOrderCost(stId);
+    if (points - pending < Number(item.cost)) {
+      return jsonOut({ error: `امتیاز شما کافی نیست؛ ${(points - pending).toLocaleString("fa")} امتیاز دارید و این جایزه ${item.cost} امتیاز است.` }, 400);
+    }
+    await db
+      .prepare("INSERT INTO ms_shop_orders (school_id, item_id, student_id, created_at) VALUES (?, ?, ?, ?)")
+      .bind(schoolId, Number(item.id), stId, nowIso())
+      .run();
+    return jsonOut({ ok: true });
+  }
+
+  if (path === "/api/ms/edu/leaderboard" && request.method === "GET" && isEduStudent) {
+    const stId = Number(tok.studentId || 0);
+    const all = await db.prepare("SELECT id, name FROM ms_students WHERE school_id = ?").bind(schoolId).all();
+    const scored: Array<{ id: number; name: string; points: number }> = [];
+    for (const s of (all.results || []) as any[]) {
+      scored.push({ id: Number(s.id), name: s.name, points: await getStudentPoints(Number(s.id)) });
+    }
+    scored.sort((a, b) => b.points - a.points);
+    return jsonOut({ top: scored.slice(0, 15), myRank: scored.findIndex((x) => x.id === stId) + 1, myPoints: await getStudentPoints(stId) });
+  }
+
+  if (path === "/api/ms/edu/library" && request.method === "GET") {
+    const rows = await db
+      .prepare("SELECT * FROM ms_library WHERE school_id = ? ORDER BY id DESC LIMIT 30")
+      .bind(schoolId)
+      .all();
+    return jsonOut({
+      items: (rows.results || []).map((l: any) => ({
+        id: Number(l.id),
+        title: l.title,
+        body: l.body,
+        by: l.created_by,
+        date: String(l.created_at || "").split("T")[0],
+      })),
+    });
+  }
+
+  if (path === "/api/ms/edu/messages" && request.method === "GET" && (isStudent || isParent || isTeacher)) {
+    if (isTeacher) {
+      const rows = await db
+        .prepare(
+          `SELECT m.*, s.name AS student_name FROM ms_messages m JOIN ms_students s ON s.id = m.student_id
+           WHERE m.school_id = ? ORDER BY m.id DESC LIMIT 40`
+        )
+        .bind(schoolId)
+        .all();
+      return jsonOut({
+        messages: (rows.results || []).map((m: any) => ({
+          id: Number(m.id),
+          studentId: Number(m.student_id),
+          studentName: m.student_name,
+          fromRole: m.from_role,
+          text: m.text,
+          date: String(m.created_at || "").split("T")[0],
+        })),
+      });
+    }
+    const stId = Number(tok.studentId || 0);
+    const rows = await db
+      .prepare("SELECT * FROM ms_messages WHERE student_id = ? ORDER BY id DESC LIMIT 40")
+      .bind(stId)
+      .all();
+    return jsonOut({
+      messages: (rows.results || [])
+        .map((m: any) => ({ id: Number(m.id), fromRole: m.from_role, text: m.text, date: String(m.created_at || "").split("T")[0] }))
+        .reverse(),
+    });
+  }
+
+  if (path === "/api/ms/edu/messages" && request.method === "POST" && (isStudent || isTeacher)) {
+    const body = (await request.json().catch(() => ({}))) as any;
+    const text = String(body.text || "").trim();
+    if (text.length < 2) return jsonOut({ error: "متن پیام کوتاه است." }, 400);
+    if (isTeacher) {
+      const sid = Number(body.studentId || 0);
+      const st: any = await db.prepare("SELECT * FROM ms_students WHERE id = ? AND school_id = ?").bind(sid, schoolId).first();
+      if (!st) return jsonOut({ error: "دانش‌آموز یافت نشد." }, 404);
+      await db
+        .prepare("INSERT INTO ms_messages (school_id, class_id, student_id, from_role, text, created_at) VALUES (?, ?, ?, 'teacher', ?, ?)")
+        .bind(schoolId, Number(st.class_id), sid, text, nowIso())
+        .run();
+      return jsonOut({ ok: true });
+    }
+    const stId = Number(tok.studentId || 0);
+    const st: any = await db.prepare("SELECT * FROM ms_students WHERE id = ? AND school_id = ?").bind(stId, schoolId).first();
+    if (!st) return jsonOut({ error: "دانش‌آموز یافت نشد." }, 404);
+    await db
+      .prepare("INSERT INTO ms_messages (school_id, class_id, student_id, from_role, text, created_at) VALUES (?, ?, ?, 'student', ?, ?)")
+      .bind(schoolId, Number(st.class_id), stId, text, nowIso())
+      .run();
+    return jsonOut({ ok: true });
+  }
+
+  // ---- 🤖 ابزارهای هوشمند یادگیری (کارگاه) ----
+  if (path === "/api/ms/edu/ai" && request.method === "POST") {
+    if (!deps.aiTool) return jsonOut({ error: "سرویس هوش مصنوعی در دسترس نیست." }, 503);
+    const body = (await request.json().catch(() => ({}))) as any;
+    const tool = String(body.tool || "");
+    const allowed = ["flashcards", "essay", "dictation", "science", "english", "mindmap", "summary", "exam", "plan", "scientist", "quizfromtext"];
+    if (!allowed.includes(tool)) return jsonOut({ error: "ابزار نامعتبر است." }, 400);
+    const result = await deps.aiTool(tool, body);
+    if (result && typeof result === "object" && result.error) return jsonOut({ error: result.error }, 502);
+    return jsonOut({ result });
+  }
+
+  // ==================== 📥 صندوق تایید معلم (ماموریت/کارگاه/فروشگاه) ====================
+  if (path === "/api/ms/teacher/inbox" && request.method === "GET" && isTeacher) {
+    const missions = await db
+      .prepare(
+        `SELECT m.*, s.name AS student_name FROM ms_missions m JOIN ms_students s ON s.id = m.student_id
+         WHERE m.school_id = ? AND m.status = 'pending' ORDER BY m.id DESC LIMIT 30`
+      )
+      .bind(schoolId)
+      .all();
+    const labs = await db
+      .prepare(
+        `SELECT l.*, s.name AS student_name FROM ms_lab l JOIN ms_students s ON s.id = l.student_id
+         WHERE l.school_id = ? AND l.status = 'pending' ORDER BY l.id DESC LIMIT 30`
+      )
+      .bind(schoolId)
+      .all();
+    const orders = await db
+      .prepare(
+        `SELECT o.*, s.name AS student_name, i.title AS item_title, i.cost FROM ms_shop_orders o
+         JOIN ms_students s ON s.id = o.student_id JOIN ms_shop_items i ON i.id = o.item_id
+         WHERE o.school_id = ? AND o.status = 'pending' ORDER BY o.id DESC LIMIT 30`
+      )
+      .bind(schoolId)
+      .all();
+    return jsonOut({
+      missions: (missions.results || []).map((m: any) => ({
+        id: Number(m.id),
+        studentId: Number(m.student_id),
+        studentName: m.student_name,
+        mission: m.mission,
+        proof: m.proof,
+        date: m.date,
+      })),
+      labs: (labs.results || []).map((l: any) => ({
+        id: Number(l.id),
+        studentId: Number(l.student_id),
+        studentName: l.student_name,
+        tool: l.tool,
+        topic: l.topic,
+        summary: l.summary,
+        date: String(l.created_at || "").split("T")[0],
+      })),
+      orders: (orders.results || []).map((o: any) => ({
+        id: Number(o.id),
+        studentId: Number(o.student_id),
+        studentName: o.student_name,
+        itemTitle: o.item_title,
+        cost: Number(o.cost),
+        date: String(o.created_at || "").split("T")[0],
+      })),
+    });
+  }
+
+  if (path === "/api/ms/teacher/inbox/approve" && request.method === "POST" && isTeacher) {
+    const body = (await request.json().catch(() => ({}))) as any;
+    const kind = String(body.kind || "");
+    const id = Number(body.id || 0);
+    const approve = body.decision !== "reject";
+    const points = Math.max(0, Number(body.points || 0));
+    const feedback = String(body.feedback || "").trim();
+    const givePoints = async (sid: number, pts: number, reason: string) => {
+      if (pts > 0) {
+        await db
+          .prepare("INSERT INTO ms_points (school_id, class_id, student_id, delta, reason, created_by, created_at) VALUES (?, (SELECT class_id FROM ms_students WHERE id = ?), ?, ?, ?, ?, ?)")
+          .bind(schoolId, sid, sid, pts, reason, "معلم", nowIso())
+          .run();
+      }
+    };
+    if (kind === "mission") {
+      const m: any = await db.prepare("SELECT * FROM ms_missions WHERE id = ? AND school_id = ?").bind(id, schoolId).first();
+      if (!m) return jsonOut({ error: "ماموریت یافت نشد." }, 404);
+      await db
+        .prepare("UPDATE ms_missions SET status = ?, points = ?, feedback = ? WHERE id = ?")
+        .bind(approve ? "approved" : "rejected", approve ? points : 0, feedback, id)
+        .run();
+      if (approve) await givePoints(Number(m.student_id), points, "تایید ماموریت روز");
+      return jsonOut({ ok: true });
+    }
+    if (kind === "lab") {
+      const l: any = await db.prepare("SELECT * FROM ms_lab WHERE id = ? AND school_id = ?").bind(id, schoolId).first();
+      if (!l) return jsonOut({ error: "گزارش کارگاه یافت نشد." }, 404);
+      await db
+        .prepare("UPDATE ms_lab SET status = ?, points = ?, feedback = ? WHERE id = ?")
+        .bind(approve ? "approved" : "rejected", approve ? points : 0, feedback, id)
+        .run();
+      if (approve) await givePoints(Number(l.student_id), points, "تایید کارگاه یادگیری");
+      return jsonOut({ ok: true });
+    }
+    if (kind === "order") {
+      const o: any = await db.prepare("SELECT * FROM ms_shop_orders WHERE id = ? AND school_id = ?").bind(id, schoolId).first();
+      if (!o) return jsonOut({ error: "سفارش یافت نشد." }, 404);
+      if (approve) {
+        const item: any = await db.prepare("SELECT * FROM ms_shop_items WHERE id = ?").bind(Number(o.item_id)).first();
+        const cost = Number(item?.cost || 0);
+        await db.prepare("UPDATE ms_shop_orders SET status = 'approved' WHERE id = ?").bind(id).run();
+        await db
+          .prepare("INSERT INTO ms_points (school_id, class_id, student_id, delta, reason, created_by, created_at) VALUES (?, (SELECT class_id FROM ms_students WHERE id = ?), ?, ?, ?, ?, ?)")
+          .bind(schoolId, Number(o.student_id), Number(o.student_id), -cost, `خرید جایزه: ${item?.title || ""}`, "فروشگاه", nowIso())
+          .run();
+      } else {
+        await db.prepare("UPDATE ms_shop_orders SET status = 'rejected' WHERE id = ?").bind(id).run();
+      }
+      return jsonOut({ ok: true });
+    }
+    return jsonOut({ error: "نوع نامعتبر." }, 400);
+  }
+
+  if (path === "/api/ms/teacher/points" && request.method === "POST" && isTeacher) {
+    const body = (await request.json().catch(() => ({}))) as any;
+    const sid = Number(body.studentId || 0);
+    const delta = Number(body.delta || 0);
+    if (!sid || !delta) return jsonOut({ error: "دانش‌آموز و مقدار امتیاز لازم است." }, 400);
+    const st: any = await db.prepare("SELECT * FROM ms_students WHERE id = ? AND school_id = ?").bind(sid, schoolId).first();
+    if (!st) return jsonOut({ error: "دانش‌آموز یافت نشد." }, 404);
+    await db
+      .prepare("INSERT INTO ms_points (school_id, class_id, student_id, delta, reason, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+      .bind(schoolId, Number(st.class_id), sid, delta, String(body.reason || "").trim() || "امتیاز معلم", "معلم", nowIso())
+      .run();
+    return jsonOut({ ok: true });
+  }
+
+  // ---- 🛒 فروشگاه (مدیریت معلم) ----
+  if (path === "/api/ms/teacher/shop" && request.method === "GET" && isTeacher) {
+    const rows = await db.prepare("SELECT * FROM ms_shop_items WHERE school_id = ? AND active = 1 ORDER BY cost").bind(schoolId).all();
+    return jsonOut({ items: (rows.results || []).map((i: any) => ({ id: Number(i.id), title: i.title, cost: Number(i.cost), active: Number(i.active) === 1 })) });
+  }
+  if (path === "/api/ms/teacher/shop" && request.method === "POST" && isTeacher) {
+    const body = (await request.json().catch(() => ({}))) as any;
+    const title = String(body.title || "").trim();
+    const cost = Number(body.cost || 0);
+    if (title.length < 2 || cost < 1) return jsonOut({ error: "عنوان و امتیاز جایزه را وارد کنید." }, 400);
+    await db
+      .prepare("INSERT INTO ms_shop_items (school_id, title, cost, created_at) VALUES (?, ?, ?, ?)")
+      .bind(schoolId, title, cost, nowIso())
+      .run();
+    return jsonOut({ ok: true });
+  }
+  if (path === "/api/ms/teacher/shop/delete" && request.method === "POST" && isTeacher) {
+    const body = (await request.json().catch(() => ({}))) as any;
+    await db.prepare("UPDATE ms_shop_items SET active = 0 WHERE id = ? AND school_id = ?").bind(Number(body.id || 0), schoolId).run();
+    return jsonOut({ ok: true });
+  }
+
+  // ---- 📂 کتابخانه (مدیریت معلم) ----
+  if (path === "/api/ms/teacher/library" && request.method === "POST" && isTeacher) {
+    const body = (await request.json().catch(() => ({}))) as any;
+    const title = String(body.title || "").trim();
+    if (title.length < 2) return jsonOut({ error: "عنوان جزوه کوتاه است." }, 400);
+    await db
+      .prepare("INSERT INTO ms_library (school_id, title, body, created_by, created_at) VALUES (?, ?, ?, ?, ?)")
+      .bind(schoolId, title, String(body.body || "").trim(), "معلم", nowIso())
+      .run();
+    return jsonOut({ ok: true });
+  }
+  if (path === "/api/ms/teacher/library/delete" && request.method === "POST" && isTeacher) {
+    const body = (await request.json().catch(() => ({}))) as any;
+    await db.prepare("DELETE FROM ms_library WHERE id = ? AND school_id = ?").bind(Number(body.id || 0), schoolId).run();
+    return jsonOut({ ok: true });
   }
 
   return jsonOut({ error: "مسیر یافت نشد." }, 404);

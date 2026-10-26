@@ -259,10 +259,10 @@ const SCHOOL_JS = String.raw`
     var NAVS = {
       student: [
         { id: "home", icon: "🏠", label: "خانه" },
+        { id: "lab", icon: "🧠", label: "کارگاه" },
         { id: "hw", icon: "📚", label: "تکالیف" },
         { id: "live", icon: "🎥", label: "کلاس آنلاین" },
-        { id: "report", icon: "📊", label: "کارنامه من" },
-        { id: "announce", icon: "📢", label: "اطلاعیه‌ها" }
+        { id: "report", icon: "📊", label: "کارنامه من" }
       ],
       parent: [
         { id: "home", icon: "🏠", label: "خانه" },
@@ -271,10 +271,10 @@ const SCHOOL_JS = String.raw`
         { id: "announce", icon: "📢", label: "اطلاعیه‌ها" }
       ],
       teacher: [
-        { id: "home", icon: "👥", label: "کلاس من" },
+        { id: "home", icon: "🏠", label: "داشبورد" },
+        { id: "inbox", icon: "📥", label: "صندوق تایید" },
         { id: "hw", icon: "📚", label: "تکالیف" },
         { id: "att", icon: "✅", label: "حضورورغیاب" },
-        { id: "grades", icon: "📝", label: "نمرات" },
         { id: "live", icon: "🎥", label: "کلاس آنلاین" }
       ],
       admin: [
@@ -386,11 +386,28 @@ const SCHOOL_JS = String.raw`
             '<div class="section-title">📚 درس‌های من</div>' +
             '<div class="stat-grid">' + subjHtml + '</div>' +
             '<div class="card" style="margin-top:12px;">' +
-              '<div class="section-title">⚡ آموزش هوشمند</div>' +
-              '<div style="display:flex;flex-wrap:wrap;gap:8px;">' +
-                '<button class="btn btn-sm" onclick="activeTab=\'ai\';renderApp()">🤖 پرسش و پاسخ هوشمند</button>' +
-                '<button class="btn btn-emerald btn-sm" onclick="activeTab=\'quiz\';renderApp()">📝 کوییز هوشمند</button>' +
-                '<button class="btn btn-ghost btn-sm" onclick="activeTab=\'hw\';renderApp()">📚 تکالیف من</button>' +
+              '<div class="section-title">📚 آموزش</div>' +
+              '<div class="menu-grid">' +
+                '<button class="menu-item" onclick="activeTab=\'ai\';renderApp()"><span>🤖</span>پرسش و پاسخ AI</button>' +
+                '<button class="menu-item" onclick="activeTab=\'quiz\';renderApp()"><span>📝</span>کوییز هوشمند</button>' +
+                '<button class="menu-item" onclick="activeTab=\'lab\';renderApp()"><span>🧠</span>کارگاه یادگیری</button>' +
+                '<button class="menu-item" onclick="activeTab=\'hw\';renderApp()"><span>📚</span>تکالیف من</button>' +
+              '</div>' +
+              '<div class="section-title">🎯 پیشرفت</div>' +
+              '<div class="menu-grid">' +
+                '<button class="menu-item" onclick="activeTab=\'mission\';renderApp()"><span>🎯</span>ماموریت روز</button>' +
+                '<button class="menu-item" onclick="activeTab=\'report\';renderApp()"><span>📊</span>کارنامه من</button>' +
+                '<button class="menu-item" onclick="activeTab=\'board\';renderApp()"><span>🏆</span>رتبه‌بندی</button>' +
+                '<button class="menu-item" onclick="goTab(\'live\')"><span>🎥</span>کلاس آنلاین</button>' +
+              '</div>' +
+              '<div class="section-title">🎮 سرگرمی و امکانات</div>' +
+              '<div class="menu-grid">' +
+                '<button class="menu-item" onclick="activeTab=\'puzzle\';renderApp()"><span>🧩</span>پازل واژه روز</button>' +
+                '<button class="menu-item" onclick="activeTab=\'shop\';renderApp()"><span>🛒</span>فروشگاه جوایز</button>' +
+                '<button class="menu-item" onclick="activeTab=\'library\';renderApp()"><span>📂</span>کتابخانه</button>' +
+                '<button class="menu-item" onclick="activeTab=\'msg\';renderApp()"><span>💬</span>پیام به معلم</button>' +
+                '<button class="menu-item" onclick="activeTab=\'history\';renderApp()"><span>📜</span>سوابق من</button>' +
+                '<button class="menu-item" onclick="activeTab=\'announce\';renderApp()"><span>📢</span>اطلاعیه‌ها</button>' +
               '</div>' +
             '</div>' +
             (session.role === "student"
@@ -425,6 +442,30 @@ const SCHOOL_JS = String.raw`
             '<div class="card"><table class="table"><thead><tr><th>امتیاز</th><th>دلیل</th><th>تاریخ</th></tr></thead><tbody>' + ptsHtml + '</tbody></table></div>';
         } else if (activeTab === "hw") {
           await renderStudentHw(main);
+          return;
+        } else if (activeTab === "lab" || activeTab === "labtool") {
+          await renderLab(main);
+          return;
+        } else if (activeTab === "mission") {
+          await renderMission(main);
+          return;
+        } else if (activeTab === "board") {
+          await renderBoard(main);
+          return;
+        } else if (activeTab === "shop") {
+          await renderShop(main);
+          return;
+        } else if (activeTab === "library") {
+          await renderLibrary(main);
+          return;
+        } else if (activeTab === "msg") {
+          await renderMessages(main);
+          return;
+        } else if (activeTab === "puzzle") {
+          renderPuzzle(main);
+          return;
+        } else if (activeTab === "history") {
+          await renderHistory(main);
           return;
         } else if (activeTab === "ai") {
           renderAiPanel(main);
@@ -514,12 +555,17 @@ const SCHOOL_JS = String.raw`
             '</tbody></table></div>' +
             '<div class="card" style="margin-top:10px;">' +
               '<div class="section-title">⚡ دسترسی سریع</div>' +
-              '<div style="display:flex;flex-wrap:wrap;gap:8px;">' +
-                '<button class="btn btn-emerald btn-sm" onclick="goTab(\'att\')">✅ حضور و غیاب امروز</button>' +
-                '<button class="btn btn-sm" onclick="goTab(\'grades\')">📝 ثبت نمره</button>' +
-                '<button class="btn btn-sm" onclick="goTab(\'hw\')">📚 تکالیف</button>' +
-                '<button class="btn btn-ghost btn-sm" onclick="goTab(\'live\')">🎥 شروع کلاس آنلاین</button>' +
-                '<button class="btn btn-ghost btn-sm" onclick="activeTab=\'announce\';renderApp()">📢 اطلاعیه</button>' +
+              '<div class="menu-grid">' +
+                '<button class="menu-item" onclick="goTab(\'att\')"><span>✅</span>حضورورغیاب</button>' +
+                '<button class="menu-item" onclick="goTab(\'grades\')"><span>📝</span>نمرات</button>' +
+                '<button class="menu-item" onclick="goTab(\'hw\')"><span>📚</span>تکالیف</button>' +
+                '<button class="menu-item" onclick="goTab(\'inbox\')"><span>📥</span>صندوق تایید</button>' +
+                '<button class="menu-item" onclick="activeTab=\'ait\';renderApp()"><span>🤖</span>ابزار هوش مصنوعی</button>' +
+                '<button class="menu-item" onclick="goTab(\'live\')"><span>🎥</span>کلاس آنلاین</button>' +
+                '<button class="menu-item" onclick="activeTab=\'shopm\';renderApp()"><span>🛒</span>فروشگاه جوایز</button>' +
+                '<button class="menu-item" onclick="activeTab=\'libm\';renderApp()"><span>📂</span>کتابخانه</button>' +
+                '<button class="menu-item" onclick="activeTab=\'msgm\';renderApp()"><span>💬</span>پیام‌های دانش‌آموزان</button>' +
+                '<button class="menu-item" onclick="activeTab=\'announce\';renderApp()"><span>📢</span>اطلاعیه</button>' +
               '</div>' +
             '</div>';
         } else if (activeTab === "att") {
@@ -569,6 +615,21 @@ const SCHOOL_JS = String.raw`
             '</tbody></table></div>';
         } else if (activeTab === "hw") {
           await renderTeacherHw(main);
+          return;
+        } else if (activeTab === "inbox") {
+          await renderInbox(main);
+          return;
+        } else if (activeTab === "ait" || activeTab === "lab" || activeTab === "labtool") {
+          await renderLab(main);
+          return;
+        } else if (activeTab === "shopm") {
+          await renderShopM(main);
+          return;
+        } else if (activeTab === "libm") {
+          await renderLibM(main);
+          return;
+        } else if (activeTab === "msgm") {
+          await renderMsgM(main);
           return;
         } else if (activeTab === "announce") {
           renderAnnounceForm(main);
@@ -1433,6 +1494,604 @@ const SCHOOL_JS = String.raw`
       renderApp();
     }
 
+    // ==================== 🧠 کارگاه یادگیری + 🎯🛒📚🎮 امکانات ادغام‌شده ====================
+    var labToolState = { tool: "", result: null, science: { topic: "", step: 0, log: [] }, eng: [] };
+    var labTools = [
+      { key: "flashcards", icon: "🤖", title: "فلش‌کارت هوشمند", desc: "ساخت خودکار فلش‌کارت" },
+      { key: "essay", icon: "✍️", title: "تصحیح انشا", desc: "ارزیابی نگارش فارسی" },
+      { key: "dictation", icon: "🎙", title: "دیکته هوشمند", desc: "بررسی دیکته با AI" },
+      { key: "science", icon: "🧪", title: "آزمایشگاه علوم", desc: "شبیه‌ساز تعاملی" },
+      { key: "english", icon: "🎧", title: "مکالمه انگلیسی", desc: "مربی مکالمه زبان" },
+      { key: "mindmap", icon: "🗺", title: "نقشه ذهنی", desc: "نقشه تصویری درس" },
+      { key: "summary", icon: "📚", title: "جزوه شب امتحان", desc: "خلاصه‌ساز هوشمند" },
+      { key: "exam", icon: "📄", title: "برگه امتحانی", desc: "آزمون تشریحی + پاسخنامه" },
+      { key: "plan", icon: "📅", title: "برنامه هفتگی", desc: "برنامه‌ریز مطالعه" },
+      { key: "quizfromtext", icon: "🎲", title: "کوییز از متن درس", desc: "طراح سوال از جزوه" },
+      { key: "scientist", icon: "🗣", title: "گفتگو با دانشمند", desc: "صندلی داغ علمی" }
+    ];
+
+    async function renderLab(main) {
+      if (activeTab === "labtool") { await renderLabTool(main); return; }
+      main.innerHTML =
+        '<div class="section-title">🧠 کارگاه هوشمند یادگیری</div>' +
+        '<div class="menu-grid">' +
+          labTools.map(function (t) {
+            return '<button class="menu-item" onclick="openLabTool(\'' + t.key + '\')"><span>' + t.icon + '</span>' + t.title + '</button>';
+          }).join("") +
+        '</div>' +
+        '<div class="card" style="margin-top:10px;"><div class="muted" style="font-size:12.5px;">💡 بعد از کار با هر ابزار، می‌توانید گزارش فعالیتتان را برای معلم بفرستید و پس از تایید او ⭐ امتیاز بگیرید.</div></div>' +
+        '<div style="text-align:center;margin:12px 0;">' +
+          '<button class="btn btn-ghost btn-sm" onclick="activeTab=\'home\';renderApp()">🔙 بازگشت به خانه</button>' +
+        '</div>';
+    }
+
+    function openLabTool(tool) {
+      labToolState = { tool: tool, result: null, science: { topic: "", step: 0, log: [] }, eng: [] };
+      activeTab = "labtool";
+      renderApp();
+    }
+
+    function labToolForm(t) {
+      if (t === "flashcards" || t === "mindmap" || t === "summary") {
+        return '<input id="ltTopic" class="input" placeholder="موضوع یا متن درس (مثلاً: فصل ۳ ریاضی — مساحت)" />' +
+          (t === "summary" ? '<input id="ltInfo" class="input" placeholder="پایه تحصیلی (مثلاً هشتم) — اختیاری" />' : "");
+      }
+      if (t === "essay") {
+        return '<textarea id="ltText" class="input" rows="7" placeholder="متن انشا یا نگارش خود را اینجا بنویسید..."></textarea>';
+      }
+      if (t === "dictation") {
+        return '<textarea id="ltExpected" class="input" rows="3" placeholder="متن اصلی دیکته (از کتاب)..."></textarea>' +
+          '<textarea id="ltOcr" class="input" rows="3" placeholder="متنی که شما نوشتید (یا تایپ کردید)..."></textarea>';
+      }
+      if (t === "science") {
+        return '<input id="ltTopic" class="input" placeholder="موضوع آزمایش (مثلاً: آزمایش فشار هوا)" />' +
+          '<div id="ltScienceLog"></div>';
+      }
+      if (t === "english") {
+        return '<textarea id="ltText" class="input" rows="3" placeholder="به انگلیسی بنویسید... (مثلاً: Hello! How are you?)"></textarea>';
+      }
+      if (t === "exam") {
+        return '<textarea id="ltTopic" class="input" rows="5" placeholder="متن درس یا جزوه برای طراحی آزمون تشریحی..."></textarea>' +
+          '<input id="ltInfo" class="input" placeholder="پایه / عنوان آزمون — اختیاری" />';
+      }
+      if (t === "plan") {
+        return '<textarea id="ltTopic" class="input" rows="3" placeholder="اهداف هفته تو (مثلاً: جمع‌بندی ریاضی فصل ۳ و لغات انگلیسی)..."></textarea>' +
+          '<input id="ltInfo" class="input" placeholder="پایه تحصیلی — اختیاری" />';
+      }
+      if (t === "quizfromtext") {
+        return '<textarea id="ltTopic" class="input" rows="6" placeholder="متن درس یا جزوه را اینجا بچسبانید تا از آن سوال طراحی شود..."></textarea>';
+      }
+      if (t === "scientist") {
+        return '<select id="ltSci" class="input">' +
+            '<option value="avicenna">🔬 ابن سینا</option>' +
+            '<option value="khayyam">📐 عمر خیام</option>' +
+            '<option value="einstein">⚛️ انیشتین</option>' +
+            '<option value="curie">🧪 ماری کوری</option>' +
+          '</select>' +
+          '<textarea id="ltText" class="input" rows="3" placeholder="سوالتان را از این دانشمند بپرسید..."></textarea>';
+      }
+      return "";
+    }
+
+    async function renderLabTool(main) {
+      var t = labToolState.tool;
+      var meta = labTools.find(function (x) { return x.key === t; }) || { icon: "🧠", title: "ابزار" };
+      main.innerHTML =
+        '<div class="section-title">' + meta.icon + ' ' + esc(meta.title) + '</div>' +
+        '<div class="card">' +
+          labToolForm(t) +
+          '<button class="btn" onclick="runLabTool()">✨ اجرای هوشمند</button>' +
+        '</div>' +
+        '<div id="ltResult">' + (labToolState.result !== null ? renderLabResult(labToolState.result, t) : "") + '</div>' +
+        (session.role === "student" && labToolState.result !== null
+          ? '<div class="card" style="text-align:center;">' +
+              '<button class="btn btn-emerald" onclick="submitLabReport()">📤 ارسال گزارش به معلم (دریافت امتیاز پس از تایید)</button>' +
+            '</div>'
+          : "") +
+        '<div style="text-align:center;margin:12px 0;">' +
+          '<button class="btn btn-ghost btn-sm" onclick="activeTab=\'lab\';renderApp()">🔙 بازگشت به کارگاه</button>' +
+        '</div>';
+    }
+
+    function renderLabResult(res, tool) {
+      if (res === null || res === undefined) return "";
+      var wrap = function (inner) { return '<div class="card">' + inner + '</div>'; };
+      if (typeof res === "string") return wrap('<div style="white-space:pre-wrap;font-size:13px;">' + esc(res) + '</div>');
+      if (Array.isArray(res)) {
+        if (res.length && res[0] && res[0].question) {
+          labToolState.quiz = res;
+          return wrap('<div class="section-title">🎲 سوالات ساخته‌شده</div>' + res.map(function (q, qi) {
+            return '<div style="margin-bottom:10px;"><b>' + (qi + 1) + '. ' + esc(q.question) + '</b>' +
+              (q.options || []).map(function (o, oi) {
+                return '<div class="muted" style="padding:5px 9px;margin-top:4px;background:var(--surface-2);border-radius:9px;">' + String.fromCharCode(1571 + oi * 0) + ' ' + esc(o) + (q.correct === oi + 1 ? ' ✅' : '') + '</div>';
+              }).join("") + '</div>';
+          }).join(""));
+        }
+        return wrap('<div class="section-title">🃏 فلش‌کارت‌ها</div>' + res.map(function (c, i) {
+          return '<div style="padding:9px 11px;background:var(--surface-2);border-radius:11px;margin-bottom:7px;">' +
+            '<b>' + (i + 1) + '. ' + esc(c.front || c.question || "") + '</b>' +
+            '<div class="muted" style="margin-top:3px;">🔹 ' + esc(c.back || c.answer || "") + '</div></div>';
+        }).join(""));
+      }
+      if (typeof res === "object") {
+        if (res.image) {
+          return wrap('<img src="' + res.image + '" style="width:100%;border-radius:12px;"/>' +
+            (res.rootTitle ? '<div class="muted" style="margin-top:6px;">🗺 ' + esc(res.rootTitle) + '</div>' : "") +
+            (res.text ? '<div class="muted" style="font-size:11.5px;white-space:pre-wrap;margin-top:6px;">' + esc(res.text) + '</div>' : ""));
+        }
+        if (res.examSheet) {
+          return wrap('<div class="section-title">📄 برگه امتحانی</div><div style="white-space:pre-wrap;font-size:13px;">' + esc(res.examSheet) + '</div>' +
+            '<div class="section-title">✅ پاسخنامه</div><div style="white-space:pre-wrap;font-size:13px;">' + esc(res.answerKey || "") + '</div>');
+        }
+        var txt = "";
+        if (res.reply) txt += "🤖 " + res.reply + "\n\n";
+        if (res.text && typeof res.text === "string") txt += res.text + "\n\n";
+        if (res.feedback) txt += res.feedback + "\n\n";
+        if (res.corrections) txt += "اصلاحات: " + res.corrections + "\n\n";
+        if (res.question) txt += "❓ " + res.question + "\n";
+        if (Array.isArray(res.choices)) {
+          txt += res.choices.map(function (c, i) { return String.fromCharCode(1571 + 0) + " " + c; }).join("\n");
+        }
+        if (!txt) {
+          Object.keys(res).forEach(function (k) {
+            if (typeof res[k] === "string") txt += k + ": " + res[k] + "\n";
+          });
+        }
+        return wrap('<div style="white-space:pre-wrap;font-size:13px;">' + esc(txt || JSON.stringify(res)) + '</div>');
+      }
+      return wrap('<div class="muted">پاسخی دریافت نشد.</div>');
+    }
+
+    async function runLabTool() {
+      var t = labToolState.tool;
+      var payload = { tool: t };
+      if (t === "flashcards" || t === "mindmap" || t === "summary" || t === "science" || t === "exam" || t === "plan" || t === "quizfromtext") {
+        payload.topic = (document.getElementById("ltTopic") || {}).value || "";
+        payload.source = payload.topic;
+        payload.info = (document.getElementById("ltInfo") || {}).value || "";
+        payload.goals = payload.topic;
+        payload.grade = payload.info;
+        if (t === "science") {
+          payload.topic = labToolState.science.topic || payload.topic;
+          if (payload.topic) labToolState.science.topic = payload.topic;
+          payload.step = labToolState.science.step;
+          payload.log = labToolState.science.log;
+        }
+        if (t === "quizfromtext") payload.count = 3;
+        if (!payload.topic.trim() && t !== "quizfromtext") return showToast("موضوع را وارد کنید");
+        if (t === "quizfromtext" && !payload.source.trim()) return showToast("متن درس را وارد کنید");
+      } else if (t === "essay" || t === "english" || t === "scientist") {
+        payload.text = (document.getElementById("ltText") || {}).value || "";
+        payload.q = payload.text;
+        payload.sciKey = (document.getElementById("ltSci") || {}).value || "avicenna";
+        if (!payload.text.trim()) return showToast("متن را وارد کنید");
+        if (t === "english") labToolState.eng.push("شما: " + payload.text);
+      } else if (t === "dictation") {
+        payload.expected = (document.getElementById("ltExpected") || {}).value || "";
+        payload.ocr = (document.getElementById("ltOcr") || {}).value || "";
+        if (!payload.expected.trim() || !payload.ocr.trim()) return showToast("هر دو متن لازم است");
+      }
+      showToast("⏳ هوش مصنوعی در حال پردازش...");
+      try {
+        var r = await api("/api/ms/edu/ai", payload);
+        labToolState.result = r.result;
+        if (t === "science") labToolState.science.step++;
+        if (t === "english" && r.result && r.result.reply) labToolState.eng.push("مربی: " + r.result.reply);
+        renderApp();
+      } catch (e) { showToast("❌ " + e.message); }
+    }
+
+    async function submitLabReport() {
+      var summary = prompt("گزارش کوتاه فعالیتتان را بنویسید (پس از تایید معلم امتیاز می‌گیرید):");
+      if (!summary || summary.trim().length < 3) return showToast("گزارش کوتاه لازم است");
+      try {
+        await api("/api/ms/edu/lab/submit", {
+          tool: labToolState.tool,
+          topic: labToolState.science.topic || labToolState.tool,
+          summary: summary.trim()
+        });
+        showToast("✅ گزارش برای معلم ارسال شد؛ پس از تایید امتیاز می‌گیرید.");
+      } catch (e) { showToast("❌ " + e.message); }
+    }
+
+    // ---- 🎯 ماموریت روز ----
+    async function renderMission(main) {
+      main.innerHTML = '<div class="card" style="text-align:center;">⏳ ...</div>';
+      try {
+        var d = await api("/api/ms/edu/home");
+        if (!d.mission) {
+          main.innerHTML = '<div class="card">📭 ماموریت امروزی ثبت نشده است.</div>' + backBtnHtml();
+          return;
+        }
+        var m = d.mission;
+        var statusHtml = m.status === "approved"
+          ? '<div style="padding:9px 11px;border-radius:11px;background:rgba(16,185,129,0.14);border:1px solid rgba(16,185,129,0.4);">✅ تایید شد — امتیاز: <b>+' + m.points + '</b>' + (m.feedback ? '<div style="font-size:12px;margin-top:4px;">💬 ' + esc(m.feedback) + '</div>' : '') + '</div>'
+          : m.status === "pending"
+          ? '<div style="padding:9px 11px;border-radius:11px;background:rgba(245,158,11,0.13);border:1px solid rgba(245,158,11,0.4);">⏳ گزارش شما برای معلم ارسال شد؛ منتظر تایید بمانید.</div>'
+          : m.status === "rejected"
+          ? '<div style="padding:9px 11px;border-radius:11px;background:rgba(244,63,94,0.12);border:1px solid rgba(244,63,94,0.4);">❌ تایید نشد' + (m.feedback ? ' — ' + esc(m.feedback) : '') + '</div>'
+          : "";
+        main.innerHTML =
+          '<div class="section-title">🎯 ماموریت امروز تو</div>' +
+          '<div class="card">' +
+            '<div style="font-size:14.5px;font-weight:700;">' + esc(m.text) + '</div>' +
+            '<div style="margin:10px 0;">' + statusHtml + '</div>' +
+            (session.role === "student" && m.status !== "approved" && m.status !== "pending"
+              ? '<textarea id="missionProof" class="input" rows="4" placeholder="گزارش انجام ماموریت را بنویسید...">' + esc(m.proof) + '</textarea>' +
+                '<button class="btn btn-emerald" onclick="submitMission()">📤 ارسال گزارش به معلم</button>'
+              : "") +
+          '</div>' +
+          backBtnHtml();
+      } catch (e) { main.innerHTML = '<div class="card">❌ ' + esc(e.message) + '</div>'; }
+    }
+
+    async function submitMission() {
+      try {
+        await api("/api/ms/edu/mission/submit", { proof: (document.getElementById("missionProof") || {}).value });
+        showToast("✅ گزارش ماموریت ارسال شد.");
+        renderApp();
+      } catch (e) { showToast("❌ " + e.message); }
+    }
+
+    // ---- 🏆 رتبه‌بندی ----
+    async function renderBoard(main) {
+      main.innerHTML = '<div class="card" style="text-align:center;">⏳ ...</div>';
+      try {
+        var d = await api("/api/ms/edu/leaderboard");
+        var medals = ["🥇", "🥈", "🥉"];
+        main.innerHTML =
+          '<div class="section-title">🏆 برترین‌های مدرسه</div>' +
+          '<div class="card"><table class="table"><thead><tr><th>#</th><th>نام</th><th>⭐ امتیاز</th></tr></thead><tbody>' +
+          (d.top || []).map(function (x, i) {
+            return '<tr' + (x.id === (session.studentId || 0) ? ' style="background:rgba(245,158,11,0.1);"' : '') + '>' +
+              '<td>' + (medals[i] || (i + 1)) + '</td><td>' + esc(x.name) + '</td><td><b>' + x.points + '</b></td></tr>';
+          }).join("") +
+          '</tbody></table></div>' +
+          '<div class="card" style="text-align:center;">🏅 رتبه شما: <b>' + (d.myRank || "—") + '</b> از ' + ((d.top || []).length) + ' • ⭐ ' + d.myPoints + ' امتیاز</div>' +
+          backBtnHtml();
+      } catch (e) { main.innerHTML = '<div class="card">❌ ' + esc(e.message) + '</div>'; }
+    }
+
+    // ---- 🛒 فروشگاه جوایز ----
+    async function renderShop(main) {
+      main.innerHTML = '<div class="card" style="text-align:center;">⏳ ...</div>';
+      try {
+        var d = await api("/api/ms/edu/shop");
+        main.innerHTML =
+          '<div class="section-title">🛒 فروشگاه جوایز (موجودی: ' + d.points + ' ⭐)</div>' +
+          '<div class="menu-grid">' +
+            (d.items || []).map(function (i) {
+              return '<button class="menu-item" style="flex-direction:column;align-items:flex-start;" onclick="orderShopItem(' + i.id + ')">' +
+                '<span style="font-size:17px;">🎁</span><b>' + esc(i.title) + '</b>' +
+                '<span class="muted" style="font-size:11.5px;">' + i.cost + ' ⭐</span></button>';
+            }).join("") +
+          '</div>' +
+          ((d.items || []).length === 0 ? '<div class="card"><div class="muted">هنوز جایزه‌ای ثبت نشده است.</div></div>' : "") +
+          '<div class="section-title">📜 سفارش‌های من</div>' +
+          '<div class="card"><table class="table"><thead><tr><th>جایزه</th><th>وضعیت</th><th>تاریخ</th></tr></thead><tbody>' +
+          ((d.orders || []).length
+            ? d.orders.map(function (o) {
+                var st = o.status === "approved" ? '✅ تحویل شد' : (o.status === "rejected" ? '❌ رد شد' : '⏳ در انتظار تایید معلم');
+                return '<tr><td>' + esc(o.title) + '</td><td>' + st + '</td><td class="muted">' + esc(o.date) + '</td></tr>';
+              }).join("")
+            : '<tr><td colspan="3" class="muted">سفارشی ندارید.</td></tr>') +
+          '</tbody></table></div>' +
+          backBtnHtml();
+      } catch (e) { main.innerHTML = '<div class="card">❌ ' + esc(e.message) + '</div>'; }
+    }
+
+    async function orderShopItem(itemId) {
+      if (!confirm("این جایزه سفارش داده شود؟ (پس از تایید معلم از امتیاز شما کم می‌شود)")) return;
+      try {
+        await api("/api/ms/edu/shop/order", { itemId: itemId });
+        showToast("✅ سفارش ثبت شد؛ منتظر تایید معلم بمانید.");
+        renderApp();
+      } catch (e) { showToast("❌ " + e.message); }
+    }
+
+    // ---- 📂 کتابخانه ----
+    async function renderLibrary(main) {
+      main.innerHTML = '<div class="card" style="text-align:center;">⏳ ...</div>';
+      try {
+        var d = await api("/api/ms/edu/library");
+        main.innerHTML =
+          '<div class="section-title">📂 کتابخانه و جزوات</div>' +
+          ((d.items || []).length
+            ? d.items.map(function (i) {
+                return '<div class="card"><b>📖 ' + esc(i.title) + '</b>' +
+                  (i.body ? '<div style="white-space:pre-wrap;font-size:12.5px;margin-top:6px;">' + esc(i.body) + '</div>' : '') +
+                  '<div class="muted" style="font-size:11px;margin-top:6px;">' + esc(i.date) + (i.by ? ' • ' + esc(i.by) : '') + '</div></div>';
+              }).join("")
+            : '<div class="card"><div class="muted">کتابخانه خالی است.</div></div>') +
+          backBtnHtml();
+      } catch (e) { main.innerHTML = '<div class="card">❌ ' + esc(e.message) + '</div>'; }
+    }
+
+    // ---- 💬 پیام به معلم ----
+    async function renderMessages(main) {
+      main.innerHTML = '<div class="card" style="text-align:center;">⏳ ...</div>';
+      try {
+        var d = await api("/api/ms/edu/messages");
+        main.innerHTML =
+          '<div class="section-title">💬 گفتگو با معلم</div>' +
+          '<div class="card">' +
+            ((d.messages || []).length
+              ? d.messages.map(function (m) {
+                  var isMe = m.fromRole === "student";
+                  return '<div style="margin-bottom:8px;text-align:' + (isMe ? "left" : "right") + ';">' +
+                    '<div style="display:inline-block;max-width:85%;padding:8px 11px;border-radius:12px;background:' + (isMe ? "rgba(99,102,241,0.18)" : "var(--surface-2)") + ';font-size:12.5px;">' +
+                    (isMe ? '' : '<b>👨‍🏫 معلم:</b> ') + esc(m.text) +
+                    '<div class="muted" style="font-size:10px;margin-top:3px;">' + esc(m.date) + '</div></div></div>';
+                }).join("")
+              : '<div class="muted">هنوز پیامی رد و بدل نشده است.</div>') +
+            '<textarea id="msgText" class="input" rows="3" placeholder="پیام خود را بنویسید..."></textarea>' +
+            '<button class="btn btn-emerald" onclick="sendMsg()">📤 ارسال به معلم</button>' +
+          '</div>' +
+          backBtnHtml();
+      } catch (e) { main.innerHTML = '<div class="card">❌ ' + esc(e.message) + '</div>'; }
+    }
+
+    async function sendMsg() {
+      try {
+        await api("/api/ms/edu/messages", { text: (document.getElementById("msgText") || {}).value });
+        showToast("✅ پیام ارسال شد.");
+        renderApp();
+      } catch (e) { showToast("❌ " + e.message); }
+    }
+
+    // ---- 🧩 پازل واژه علمی روز ----
+    var PUZZLE_WORDS = [
+      ["فتوسنتز", "فرایند ساخت غذا توسط گیاهان با نور خورشید"],
+      ["گرانش", "نیروی جذب اجسام به سمت زمین"],
+      ["مولکول", "کوچک‌ترین جزء یک ماده شیمیایی"],
+      ["اقلیم", "آب‌وهوای بلندمدت یک منطقه"],
+      ["بُعد", "یکی از جهت‌های طول، عرض یا ارتفاع"],
+      ["تکامل", "تدریجی تغییر گونه‌های زنده در طول زمان"],
+      ["اقیانوسوس", "پهنه آبی شور و گسترده روی زمین"],
+      ["انرژی", "توانایی انجام کار"],
+      ["سلول", "کوچک‌ترین واحد زنده بدن"],
+      ["فسیل", "بازمانده جانوران و گیاهان در سنگ‌ها"],
+      ["مدار", "مسیر چرخش سیاره به دور خورشید"],
+      ["ویروس", "عفونت‌زن میکروسکوپی بدون سلول"],
+      ["نور", "انرژی الکترومغناطیسی قابل دیدن"],
+      ["آتشفشان", "کوهی که گدازه از آن خارج می‌شود"],
+      ["هم‌وایی", "همکاری اجزا برای یک هدف مشترک"],
+      ["بُرهان", "دلیل و استدلال منطقی"],
+      ["فرسايش", "ساییده شدن خاک توسط باد و آب"],
+      ["ذره‌بین", "ابزار بزرگ‌نمایی اشیاء کوچک"]
+    ];
+    var puzzleState = { guess: "", solved: false };
+
+    function renderPuzzle(main) {
+      var day = Math.floor(Date.now() / 86400000);
+      var w = PUZZLE_WORDS[day % PUZZLE_WORDS.length];
+      var scrambled = w[0].split("").sort(function () { return 0.5 - ((day * 7919) % 13) / 13; }).join("");
+      main.innerHTML =
+        '<div class="section-title">🧩 معمای واژه علمی روز</div>' +
+        '<div class="card" style="text-align:center;">' +
+          '<div class="muted" style="font-size:12.5px;">این حروف را مرتب کن:</div>' +
+          '<div style="font-size:26px;font-weight:800;letter-spacing:6px;margin:10px 0;color:var(--gold-light);">' + esc(scrambled) + '</div>' +
+          '<div class="muted" style="font-size:12.5px;">💡 سرنخ: ' + esc(w[1]) + '</div>' +
+          (puzzleState.solved
+            ? '<div style="margin-top:12px;padding:10px;border-radius:11px;background:rgba(16,185,129,0.15);">✅ آفرین! جواب: <b>' + esc(w[0]) + '</b></div>'
+            : '<input id="pzGuess" class="input" style="margin-top:12px;" placeholder="پاسخ شما..." value="' + esc(puzzleState.guess) + '" />' +
+              '<button class="btn btn-emerald" onclick="checkPuzzle(\'' + esc(w[0]) + '\')">بررسی پاسخ</button>') +
+        '</div>' +
+        backBtnHtml();
+    }
+
+    function checkPuzzle(answer) {
+      var v = (document.getElementById("pzGuess") || {}).value || "";
+      puzzleState.guess = v;
+      if (v.trim() === answer) {
+        puzzleState.solved = true;
+        showToast("🎉 آفرین! درست حدس زدی!");
+      } else {
+        showToast("هنوز درست نیست؛ دوباره تلاش کن 💪");
+      }
+      renderApp();
+    }
+
+    // ---- 📜 سوابق من ----
+    async function renderHistory(main) {
+      main.innerHTML = '<div class="card" style="text-align:center;">⏳ ...</div>';
+      try {
+        var lab = await api("/api/ms/edu/lab");
+        var shop = await api("/api/ms/edu/shop");
+        main.innerHTML =
+          '<div class="section-title">🧠 سوابق کارگاه یادگیری</div>' +
+          '<div class="card"><table class="table"><thead><tr><th>ابزار</th><th>وضعیت</th><th>⭐</th></tr></thead><tbody>' +
+          ((lab.items || []).length
+            ? lab.items.map(function (l) {
+                var st = l.status === "approved" ? '✅ تایید شد' : (l.status === "rejected" ? '❌ رد شد' : '⏳ در انتظار تایید');
+                return '<tr><td>' + esc(l.tool) + '</td><td>' + st + '</td><td>' + (l.points || 0) + '</td></tr>';
+              }).join("")
+            : '<tr><td colspan="3" class="muted">هنوز فعالیتی ثبت نشده است.</td></tr>') +
+          '</tbody></table></div>' +
+          '<div class="section-title">🛒 سوابق فروشگاه</div>' +
+          '<div class="card"><table class="table"><thead><tr><th>جایزه</th><th>وضعیت</th></tr></thead><tbody>' +
+          ((shop.orders || []).length
+            ? shop.orders.map(function (o) {
+                var st = o.status === "approved" ? '✅ تحویل شد' : (o.status === "rejected" ? '❌ رد شد' : '⏳ در انتظار');
+                return '<tr><td>' + esc(o.title) + '</td><td>' + st + '</td></tr>';
+              }).join("")
+            : '<tr><td colspan="2" class="muted">سفارشی ندارید.</td></tr>') +
+          '</tbody></table></div>' +
+          backBtnHtml();
+      } catch (e) { main.innerHTML = '<div class="card">❌ ' + esc(e.message) + '</div>'; }
+    }
+
+    // ==================== 📥 پنل‌های معلم (تاییدها/فروشگاه/کتابخانه/پیام) ====================
+    async function renderInbox(main) {
+      main.innerHTML = '<div class="card" style="text-align:center;">⏳ ...</div>';
+      try {
+        var d = await api("/api/ms/teacher/inbox");
+        var sec = function (title, rows, kind, render) {
+          return '<div class="section-title">' + title + '</div>' +
+            (rows.length ? rows.map(render).join("") : '<div class="card"><div class="muted">موردی در انتظار تایید نیست.</div></div>');
+        };
+        main.innerHTML =
+          sec("🎯 ماموریت‌های روز در انتظار تایید", d.missions || [], "mission", function (m) {
+            return '<div class="card">' +
+              '<b>👤 ' + esc(m.studentName) + '</b>' +
+              '<div class="muted" style="font-size:12px;margin:5px 0;">🎯 ' + esc(m.mission) + '</div>' +
+              '<div style="padding:8px 10px;background:var(--surface-2);border-radius:10px;font-size:12.5px;">📝 ' + esc(m.proof) + '</div>' +
+              '<div style="display:flex;gap:7px;margin-top:8px;flex-wrap:wrap;">' +
+                '<input id="pts_mission_' + m.id + '" class="input" type="number" dir="ltr" placeholder="⭐ امتیاز" style="width:90px;margin:0;" value="5" />' +
+                '<input id="fb_mission_' + m.id + '" class="input" placeholder="بازخورد (اختیاری)" style="flex:1;min-width:120px;margin:0;" />' +
+                '<button class="btn btn-emerald btn-sm" onclick="approveInbox(\'mission\',' + m.id + ',\'approve\')">✅ تایید</button>' +
+                '<button class="btn btn-rose btn-sm" onclick="approveInbox(\'mission\',' + m.id + ',\'reject\')">❌</button>' +
+              '</div></div>';
+          }) +
+          sec("🧠 گزارش‌های کارگاه در انتظار تایید", d.labs || [], "lab", function (l) {
+            return '<div class="card">' +
+              '<b>👤 ' + esc(l.studentName) + '</b> <span class="badge-pill" style="background:rgba(99,102,241,0.18);color:#C7D2FE;">' + esc(l.tool) + '</span>' +
+              (l.topic ? '<div class="muted" style="font-size:12px;margin:5px 0;">📌 ' + esc(l.topic) + '</div>' : '') +
+              '<div style="padding:8px 10px;background:var(--surface-2);border-radius:10px;font-size:12.5px;">📝 ' + esc(l.summary) + '</div>' +
+              '<div style="display:flex;gap:7px;margin-top:8px;flex-wrap:wrap;">' +
+                '<input id="pts_lab_' + l.id + '" class="input" type="number" dir="ltr" placeholder="⭐ امتیاز" style="width:90px;margin:0;" value="10" />' +
+                '<input id="fb_lab_' + l.id + '" class="input" placeholder="بازخورد (اختیاری)" style="flex:1;min-width:120px;margin:0;" />' +
+                '<button class="btn btn-emerald btn-sm" onclick="approveInbox(\'lab\',' + l.id + ',\'approve\')">✅ تایید</button>' +
+                '<button class="btn btn-rose btn-sm" onclick="approveInbox(\'lab\',' + l.id + ',\'reject\')">❌</button>' +
+              '</div></div>';
+          }) +
+          sec("🛒 سفارش‌های فروشگاه در انتظار تایید", d.orders || [], "order", function (o) {
+            return '<div class="card">' +
+              '<b>👤 ' + esc(o.studentName) + '</b> — 🎁 ' + esc(o.itemTitle) + ' (' + o.cost + ' ⭐)' +
+              '<div style="display:flex;gap:7px;margin-top:8px;">' +
+                '<button class="btn btn-emerald btn-sm" onclick="approveInbox(\'order\',' + o.id + ',\'approve\')">✅ تحویل جایزه</button>' +
+                '<button class="btn btn-rose btn-sm" onclick="approveInbox(\'order\',' + o.id + ',\'reject\')">❌ رد</button>' +
+              '</div></div>';
+          }) +
+          backBtnHtml();
+      } catch (e) { main.innerHTML = '<div class="card">❌ ' + esc(e.message) + '</div>'; }
+    }
+
+    async function approveInbox(kind, id, decision) {
+      try {
+        var pts = Number((document.getElementById("pts_" + kind + "_" + id) || {}).value || 0);
+        var fb = (document.getElementById("fb_" + kind + "_" + id) || {}).value || "";
+        await api("/api/ms/teacher/inbox/approve", { kind: kind, id: id, decision: decision, points: pts, feedback: fb });
+        showToast(decision === "reject" ? "❌ رد شد." : "✅ تایید شد و امتیاز ثبت گردید.");
+        renderApp();
+      } catch (e) { showToast("❌ " + e.message); }
+    }
+
+    async function renderShopM(main) {
+      main.innerHTML = '<div class="card" style="text-align:center;">⏳ ...</div>';
+      try {
+        var d = await api("/api/ms/teacher/shop");
+        main.innerHTML =
+          '<div class="section-title">🛒 مدیریت فروشگاه جوایز</div>' +
+          '<div class="card">' +
+            '<input id="shopTitle" class="input" placeholder="عنوان جایزه (مثلاً: خودکار رنگی)" />' +
+            '<input id="shopCost" class="input" type="number" dir="ltr" placeholder="قیمت به امتیاز (مثلاً 50)" />' +
+            '<button class="btn btn-emerald" onclick="addShopItem()">➕ افزودن جایزه</button>' +
+          '</div>' +
+          ((d.items || []).length
+            ? d.items.map(function (i) {
+                return '<div class="card" style="display:flex;align-items:center;justify-content:space-between;">' +
+                  '<div><b>🎁 ' + esc(i.title) + '</b><div class="muted" style="font-size:12px;">' + i.cost + ' ⭐</div></div>' +
+                  '<button class="btn btn-ghost btn-sm" onclick="delShopItem(' + i.id + ')">🗑</button></div>';
+              }).join("")
+            : '<div class="card"><div class="muted">هنوز جایزه‌ای ثبت نشده است.</div></div>') +
+          backBtnHtml();
+      } catch (e) { main.innerHTML = '<div class="card">❌ ' + esc(e.message) + '</div>'; }
+    }
+
+    async function addShopItem() {
+      try {
+        await api("/api/ms/teacher/shop", {
+          title: (document.getElementById("shopTitle") || {}).value,
+          cost: Number((document.getElementById("shopCost") || {}).value || 0)
+        });
+        showToast("✅ جایزه اضافه شد.");
+        renderApp();
+      } catch (e) { showToast("❌ " + e.message); }
+    }
+
+    async function delShopItem(id) {
+      if (!confirm("این جایزه حذف شود؟")) return;
+      try {
+        await api("/api/ms/teacher/shop/delete", { id: id });
+        showToast("🗑 حذف شد.");
+        renderApp();
+      } catch (e) { showToast("❌ " + e.message); }
+    }
+
+    async function renderLibM(main) {
+      main.innerHTML = '<div class="card" style="text-align:center;">⏳ ...</div>';
+      try {
+        var d = await api("/api/ms/edu/library");
+        main.innerHTML =
+          '<div class="section-title">📂 مدیریت کتابخانه کلاس</div>' +
+          '<div class="card">' +
+            '<input id="libTitle" class="input" placeholder="عنوان جزوه یا نکته" />' +
+            '<textarea id="libBody" class="input" rows="4" placeholder="متن جزوه..."></textarea>' +
+            '<button class="btn btn-emerald" onclick="addLibItem()">➕ افزودن به کتابخانه</button>' +
+          '</div>' +
+          ((d.items || []).length
+            ? d.items.map(function (i) {
+                return '<div class="card"><b>📖 ' + esc(i.title) + '</b>' +
+                  (i.body ? '<div class="muted" style="font-size:12px;white-space:pre-wrap;margin:5px 0;">' + esc(i.body) + '</div>' : '') +
+                  '<button class="btn btn-ghost btn-sm" onclick="delLibItem(' + i.id + ')">🗑 حذف</button></div>';
+              }).join("")
+            : '<div class="card"><div class="muted">کتابخانه خالی است.</div></div>') +
+          backBtnHtml();
+      } catch (e) { main.innerHTML = '<div class="card">❌ ' + esc(e.message) + '</div>'; }
+    }
+
+    async function addLibItem() {
+      try {
+        await api("/api/ms/teacher/library", {
+          title: (document.getElementById("libTitle") || {}).value,
+          body: (document.getElementById("libBody") || {}).value
+        });
+        showToast("✅ به کتابخانه اضافه شد.");
+        renderApp();
+      } catch (e) { showToast("❌ " + e.message); }
+    }
+
+    async function delLibItem(id) {
+      if (!confirm("این جزوه حذف شود؟")) return;
+      try {
+        await api("/api/ms/teacher/library/delete", { id: id });
+        showToast("🗑 حذف شد.");
+        renderApp();
+      } catch (e) { showToast("❌ " + e.message); }
+    }
+
+    async function renderMsgM(main) {
+      main.innerHTML = '<div class="card" style="text-align:center;">⏳ ...</div>';
+      try {
+        var d = await api("/api/ms/edu/messages");
+        main.innerHTML =
+          '<div class="section-title">💬 پیام‌های دانش‌آموزان</div>' +
+          ((d.messages || []).length
+            ? d.messages.map(function (m) {
+                return '<div class="card">' +
+                  '<b>👤 ' + esc(m.studentName) + '</b>' +
+                  (m.fromRole === "teacher" ? ' <span class="badge-pill" style="background:rgba(99,102,241,0.18);color:#C7D2FE;">پاسخ شما</span>' : '') +
+                  '<div style="padding:8px 10px;background:var(--surface-2);border-radius:10px;font-size:12.5px;margin:6px 0;">' + esc(m.text) + '</div>' +
+                  '<div style="display:flex;gap:7px;">' +
+                    '<input id="reply_' + m.studentId + '" class="input" placeholder="پاسخ به ' + esc(m.studentName) + '..." style="flex:1;margin:0;" />' +
+                    '<button class="btn btn-emerald btn-sm" onclick="replyMsg(' + m.studentId + ')">📤</button>' +
+                  '</div></div>';
+              }).join("")
+            : '<div class="card"><div class="muted">پیامی وجود ندارد.</div></div>') +
+          backBtnHtml();
+      } catch (e) { main.innerHTML = '<div class="card">❌ ' + esc(e.message) + '</div>'; }
+    }
+
+    async function replyMsg(studentId) {
+      try {
+        var el = document.getElementById("reply_" + studentId);
+        await api("/api/ms/edu/messages", { studentId: studentId, text: (el || {}).value });
+        showToast("✅ پاسخ ارسال شد.");
+        renderApp();
+      } catch (e) { showToast("❌ " + e.message); }
+    }
+
     // ==================== اطلاعیه‌ها ====================
     async function renderAnnounceList(main) {
       main.innerHTML = '<div class="card" style="text-align:center;">⏳ ...</div>';
@@ -1649,6 +2308,14 @@ export function buildSchoolHtml(): string {
       font-size: 13px; z-index: 3000; max-width: 92%; text-align: center;
       border: 1px solid rgba(148,163,184,0.25); box-shadow: 0 10px 30px rgba(0,0,0,0.4);
     }
+    .menu-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+    .menu-item {
+      background: var(--surface-2); border: 1px solid var(--border); border-radius: 13px;
+      padding: 12px 6px; cursor: pointer; color: var(--text); font-size: 11.5px; font-weight: 700;
+      display: flex; flex-direction: column; align-items: center; gap: 5px; text-align: center;
+    }
+    .menu-item span { font-size: 21px; }
+    .menu-item:active { transform: scale(0.96); }
     ${LIVE_CLASS_CSS}
   </style>
 </head>

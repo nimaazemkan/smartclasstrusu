@@ -10899,6 +10899,44 @@ async function handleAppRequest(
       normalizeDigits: core.normalizeDigits,
       askAI: async (question) => await core.askAI(env, question),
       generateQuiz: async (topic, count) => await generateMultipleQuizzesWithAI(env, topic, count),
+      aiTool: async (tool, p) => {
+        try {
+          switch (tool) {
+            case "flashcards":
+              return await core.generateFlashcardsWithAI(env, String(p.topic || ""));
+            case "essay":
+              return await core.evaluatePersianEssayWithAI(env, String(p.text || ""));
+            case "dictation":
+              return await core.evaluateDictationWithAI(env, String(p.expected || ""), String(p.ocr || ""));
+            case "science":
+              return await core.runScienceLabStepWithAI(env, String(p.topic || ""), Number(p.step || 0), Array.isArray(p.log) ? p.log : [], p.chosen);
+            case "english":
+              return await core.runEnglishConversationTurn(env, String(p.text || ""));
+            case "mindmap": {
+              const r = await core.generateMindMapPngWithAI(env, String(p.topic || ""));
+              return {
+                image: r && r.png ? "data:image/png;base64," + core.uint8ToBase64(r.png) : "",
+                rootTitle: r?.rootTitle || "",
+                text: r?.textFallback || "",
+              };
+            }
+            case "summary":
+              return await core.generateLessonSummaryWithAI(env, String(p.source || ""), String(p.info || ""));
+            case "exam":
+              return await core.generateDescriptiveExamWithAI(env, String(p.source || ""), String(p.info || ""));
+            case "plan":
+              return await core.generateWeeklyStudyPlanWithAI(env, String(p.goals || ""), String(p.grade || ""));
+            case "scientist":
+              return await core.runScientistChatTurn(env, String(p.sciKey || "avicenna"), String(p.q || ""));
+            case "quizfromtext":
+              return await generateQuizzesFromSourceText(env, String(p.source || ""), Number(p.count || 3));
+            default:
+              return { error: "ابزار نامعتبر است." };
+          }
+        } catch (e: any) {
+          return { error: "خطای هوش مصنوعی: " + (e?.message || "") };
+        }
+      },
     });
     if (msRes) return msRes;
   }

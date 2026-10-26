@@ -81,6 +81,13 @@ export function resolveTursoConfig(envObj: Record<string, string | undefined> = 
       }
     }
   }
+  // ۳. پیش‌فرض کلاس اصلی در صورت تنظیم شدن فقط توکن (برای سادگی استقرار اولیه؛ برای مدارس دیگر TURSO_DATABASE_URL جدید ست شود)
+  if (envObj["TURSO_AUTH_TOKEN"]?.trim()) {
+    return {
+      url: "https://smartclass-db-nimaazemkan.aws-eu-north-1.turso.io",
+      authToken: envObj["TURSO_AUTH_TOKEN"].trim(),
+    };
+  }
   return null;
 }
 

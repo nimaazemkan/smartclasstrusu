@@ -1482,8 +1482,18 @@ export async function handleMultiSchoolRequest(
     const topic = String(body.topic || "").trim();
     if (topic.length < 2) return jsonOut({ error: "موضوع کوییز را بنویسید." }, 400);
     const count = Math.min(Math.max(Number(body.count || 3), 1), 5);
-    const q = await deps.generateQuiz(topic, count);
-    if (typeof q === "string") return jsonOut({ error: q }, 502);
+    // تلاش مجدد خودکار برای پایداری خروجی هوش مصنوعی
+    let q: any = null;
+    let lastErr = "پاسخ نامعتبر از هوش مصنوعی.";
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const res = await deps.generateQuiz(topic, count).catch((e: any) => String(e?.message || "خطای هوش مصنوعی"));
+      if (Array.isArray(res) && res.length > 0) {
+        q = res;
+        break;
+      }
+      lastErr = typeof res === "string" ? res : lastErr;
+    }
+    if (!q) return jsonOut({ error: lastErr }, 502);
     return jsonOut({ questions: q });
   }
 

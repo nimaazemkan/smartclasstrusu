@@ -101,6 +101,7 @@ const SCHOOL_JS = String.raw`
 
     // ==================== صفحه ورود و پیدا کردن مدرسه ====================
     function renderLogin(main) {
+      main = main || document.getElementById("mainView");
       var roleTabs = [
         { id: "student", label: "🎓 دانش‌آموز" },
         { id: "parent", label: "👪 والدین" },
@@ -233,6 +234,7 @@ const SCHOOL_JS = String.raw`
     };
 
     async function renderPass(main) {
+      main = main || document.getElementById("mainView");
       main.innerHTML =
         '<div class="section-title">🔑 تغییر رمز عبور</div>' +
         '<div class="card">' +

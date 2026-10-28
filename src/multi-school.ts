@@ -1341,7 +1341,7 @@ export async function handleMultiSchoolRequest(
         if (dup) return jsonOut({ error: "این نام کاربری قبلاً ثبت شده است." }, 400);
         await db.prepare("UPDATE ms_teachers SET username = ? WHERE id = ?").bind(newUsername, Number(t.id)).run();
       }
-      if (birthday) await db.prepare("UPDATE ms_teachers SET birthday = ? WHERE id = ?").bind(birthday, Number(t.id)).run();
+      if (body.birthday !== undefined) await db.prepare("UPDATE ms_teachers SET birthday = ? WHERE id = ?").bind(birthday, Number(t.id)).run();
       return jsonOut({ ok: true, username: newUsername || String(t.username) });
     }
     if (isStudent) {
@@ -1353,7 +1353,7 @@ export async function handleMultiSchoolRequest(
         if (dup) return jsonOut({ error: "این نام کاربری قبلاً ثبت شده است." }, 400);
         await db.prepare("UPDATE ms_students SET national_id = ? WHERE id = ?").bind(newUsername, Number(st.id)).run();
       }
-      if (birthday) await db.prepare("UPDATE ms_students SET birthday = ? WHERE id = ?").bind(birthday, Number(st.id)).run();
+      if (body.birthday !== undefined) await db.prepare("UPDATE ms_students SET birthday = ? WHERE id = ?").bind(birthday, Number(st.id)).run();
       return jsonOut({ ok: true, username: newUsername || String(st.national_id || st.student_code) });
     }
     if (isAdmin) {

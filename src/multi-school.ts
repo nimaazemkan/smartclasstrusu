@@ -233,7 +233,39 @@ export async function ensureSchoolTables(db: D1Database): Promise<void> {
     .run();
   await db
     .prepare(
-      `CREATE TABLE IF NOT EXISTS ms_messages (
+      `CREATE TABLE IF NOT EXISTS ms_deadlines (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        school_id INTEGER NOT NULL,
+        class_id INTEGER NOT NULL,
+        title TEXT NOT NULL,
+        date TEXT NOT NULL,
+        created_at TEXT
+      )`)
+      .run();
+    await db
+      .prepare(`CREATE TABLE IF NOT EXISTS ms_muddy (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        school_id INTEGER NOT NULL,
+        class_id INTEGER NOT NULL,
+        student_id INTEGER NOT NULL,
+        topic TEXT NOT NULL,
+        status TEXT DEFAULT 'open',
+        created_at TEXT
+      )`)
+      .run();
+    await db
+      .prepare(`CREATE TABLE IF NOT EXISTS ms_certificates (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        school_id INTEGER NOT NULL,
+        class_id INTEGER NOT NULL,
+        student_id INTEGER NOT NULL,
+        title TEXT NOT NULL,
+        body TEXT DEFAULT '',
+        created_at TEXT
+      )`)
+      .run();
+    await db
+      .prepare(`CREATE TABLE IF NOT EXISTS ms_messages (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         school_id INTEGER NOT NULL,
         class_id INTEGER NOT NULL,
@@ -784,8 +816,23 @@ export async function handleMultiSchoolRequest(
         .prepare("SELECT * FROM ms_announcements WHERE school_id = ? ORDER BY id DESC LIMIT 12")
         .bind(schoolId)
         .all();
+      const clsRows = await db.prepare("SELECT * FROM ms_classes WHERE school_id = ? ORDER BY grade_name, class_name").bind(schoolId).all();
+      const classes: any[] = [];
+      for (const cls of (clsRows.results || []) as any[]) {
+        const cnt = (await db.prepare("SELECT COUNT(*) c FROM ms_students WHERE class_id = ?").bind(Number(cls.id)).first()) as any;
+        classes.push({
+          id: Number(cls.id),
+          label: classLabel(cls),
+          grade: cls.grade_name,
+          name: cls.class_name,
+          subject: "",
+          studentCount: Number(cnt?.c || 0),
+          live: getLiveRoomPublicStatus(`s${schoolId}c${cls.id}`),
+        });
+      }
       return jsonOut({
         school: schoolInfo,
+        classes,
         stats: {
           classes: Number(cCnt?.c || 0),
           teachers: Number(tCnt?.c || 0),
@@ -799,16 +846,23 @@ export async function handleMultiSchoolRequest(
     return jsonOut({ error: "نقش نامعتبر." }, 400);
   }
 
-  // ==================== پنل معلم ====================
-  if (isTeacher) {
+  // ==================== پنل معلم (معلم + مدیر مدرسه) ====================
+  if (isTeacher || isAdmin) {
     const tId = Number(tok.teacherId || 0);
-    const t: any = await db.prepare("SELECT * FROM ms_teachers WHERE id = ? AND school_id = ?").bind(tId, schoolId).first();
-    if (!t) return jsonOut({ error: "معلم یافت نشد." }, 404);
+    let t: any = null;
+    if (isTeacher) {
+      t = await db.prepare("SELECT * FROM ms_teachers WHERE id = ? AND school_id = ?").bind(tId, schoolId).first();
+      if (!t) return jsonOut({ error: "معلم یافت نشد." }, 404);
+    } else {
+      t = { id: 0, name: "مدیر مدرسه", subjects: "{}" };
+    }
     const subs = parseSubjects(t.subjects);
 
     const assertClass = async (cid: number) => {
       const cls = await db.prepare("SELECT * FROM ms_classes WHERE id = ? AND school_id = ?").bind(cid, schoolId).first();
-      if (!cls || !(String(cid) in subs)) return null;
+      if (!cls) return null;
+      if (isAdmin) return cls;
+      if (!(String(cid) in subs)) return null;
       return cls;
     };
 
@@ -888,7 +942,7 @@ export async function handleMultiSchoolRequest(
       if (!sid || !isFinite(score)) return jsonOut({ error: "اطلاعات نمره ناقص است." }, 400);
       await db
         .prepare("INSERT INTO ms_grades (school_id, class_id, student_id, subject, title, score, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
-        .bind(schoolId, cid, sid, subs[String(cid)], String(body.title || "").trim() || "نمره", score, t.name, nowIso())
+        .bind(schoolId, cid, sid, String(body.subject || "").trim() || subs[String(cid)] || "عمومی", String(body.title || "").trim() || "نمره", score, t.name, nowIso())
         .run();
       return jsonOut({ ok: true });
     }
@@ -1899,8 +1953,8 @@ export async function handleMultiSchoolRequest(
     });
   }
 
-  if (path === "/api/ms/edu/messages" && request.method === "GET" && (isStudent || isParent || isTeacher)) {
-    if (isTeacher) {
+  if (path === "/api/ms/edu/messages" && request.method === "GET" && (isStudent || isParent || isTeacher || isAdmin)) {
+    if (isTeacher || isAdmin) {
       const rows = await db
         .prepare(
           `SELECT m.*, s.name AS student_name FROM ms_messages m JOIN ms_students s ON s.id = m.student_id
@@ -1931,11 +1985,11 @@ export async function handleMultiSchoolRequest(
     });
   }
 
-  if (path === "/api/ms/edu/messages" && request.method === "POST" && (isStudent || isTeacher)) {
+  if (path === "/api/ms/edu/messages" && request.method === "POST" && (isStudent || isParent || isTeacher || isAdmin)) {
     const body = (await request.json().catch(() => ({}))) as any;
     const text = String(body.text || "").trim();
     if (text.length < 2) return jsonOut({ error: "متن پیام کوتاه است." }, 400);
-    if (isTeacher) {
+    if (isTeacher || isAdmin) {
       const sid = Number(body.studentId || 0);
       const st: any = await db.prepare("SELECT * FROM ms_students WHERE id = ? AND school_id = ?").bind(sid, schoolId).first();
       if (!st) return jsonOut({ error: "دانش‌آموز یافت نشد." }, 404);
@@ -1948,11 +2002,42 @@ export async function handleMultiSchoolRequest(
     const stId = Number(tok.studentId || 0);
     const st: any = await db.prepare("SELECT * FROM ms_students WHERE id = ? AND school_id = ?").bind(stId, schoolId).first();
     if (!st) return jsonOut({ error: "دانش‌آموز یافت نشد." }, 404);
+    const fromRole = isParent ? "parent" : "student";
     await db
-      .prepare("INSERT INTO ms_messages (school_id, class_id, student_id, from_role, text, created_at) VALUES (?, ?, ?, 'student', ?, ?)")
-      .bind(schoolId, Number(st.class_id), stId, text, nowIso())
+      .prepare("INSERT INTO ms_messages (school_id, class_id, student_id, from_role, text, created_at) VALUES (?, ?, ?, ?, ?, ?)")
+      .bind(schoolId, Number(st.class_id), stId, fromRole, text, nowIso())
       .run();
     return jsonOut({ ok: true });
+  }
+  // ---- ⏰ ددلاین‌ها (دانش‌آموز/والد) ----
+  if (path === "/api/ms/edu/deadlines" && request.method === "GET" && (isStudent || isParent)) {
+    const stId = Number(tok.studentId || 0);
+    const st: any = await db.prepare("SELECT * FROM ms_students WHERE id = ? AND school_id = ?").bind(stId, schoolId).first();
+    if (!st) return jsonOut({ error: "دانش‌آموز یافت نشد." }, 404);
+    const rows = await db.prepare("SELECT * FROM ms_deadlines WHERE class_id = ? AND school_id = ? ORDER BY date").bind(Number(st.class_id), schoolId).all();
+    return jsonOut({ deadlines: (rows.results || []).map((d: any) => ({ id: Number(d.id), title: d.title, date: d.date })) });
+  }
+  // ---- 🆘 مباحث گنگ (دانش‌آموز) ----
+  if (path === "/api/ms/edu/muddy" && request.method === "GET" && isStudent) {
+    const stId = Number(tok.studentId || 0);
+    const rows = await db.prepare("SELECT * FROM ms_muddy WHERE student_id = ? AND school_id = ? ORDER BY id DESC LIMIT 20").bind(stId, schoolId).all();
+    return jsonOut({ muddy: (rows.results || []).map((m: any) => ({ id: Number(m.id), topic: m.topic, status: m.status, date: String(m.created_at || "").split("T")[0] })) });
+  }
+  if (path === "/api/ms/edu/muddy" && request.method === "POST" && isStudent) {
+    const body = (await request.json().catch(() => ({}))) as any;
+    const topic = String(body.topic || "").trim().slice(0, 300);
+    if (topic.length < 3) return jsonOut({ error: "موضوع را کامل بنویسید." }, 400);
+    const stId = Number(tok.studentId || 0);
+    const st: any = await db.prepare("SELECT * FROM ms_students WHERE id = ? AND school_id = ?").bind(stId, schoolId).first();
+    if (!st) return jsonOut({ error: "دانش‌آموز یافت نشد." }, 404);
+    await db.prepare("INSERT INTO ms_muddy (school_id, class_id, student_id, topic, status, created_at) VALUES (?, ?, ?, ?, 'open', ?)").bind(schoolId, Number(st.class_id), stId, topic, nowIso()).run();
+    return jsonOut({ ok: true });
+  }
+  // ---- 🏅 لوح تقدیر (دانش‌آموز/والد) ----
+  if (path === "/api/ms/edu/certificates" && request.method === "GET" && (isStudent || isParent)) {
+    const stId = Number(tok.studentId || 0);
+    const rows = await db.prepare("SELECT * FROM ms_certificates WHERE student_id = ? AND school_id = ? ORDER BY id DESC LIMIT 20").bind(stId, schoolId).all();
+    return jsonOut({ certificates: (rows.results || []).map((c: any) => ({ id: Number(c.id), title: c.title, body: c.body, date: String(c.created_at || "").split("T")[0] })) });
   }
 
   // ---- 🤖 ابزارهای هوشمند یادگیری (کارگاه) ----
@@ -1968,7 +2053,7 @@ export async function handleMultiSchoolRequest(
   }
 
   // ==================== 📥 صندوق تایید معلم (ماموریت/کارگاه/فروشگاه) ====================
-  if (path === "/api/ms/teacher/inbox" && request.method === "GET" && isTeacher) {
+  if (path === "/api/ms/teacher/inbox" && request.method === "GET" && (isTeacher || isAdmin)) {
     const missions = await db
       .prepare(
         `SELECT m.*, s.name AS student_name FROM ms_missions m JOIN ms_students s ON s.id = m.student_id
@@ -2020,7 +2105,7 @@ export async function handleMultiSchoolRequest(
     });
   }
 
-  if (path === "/api/ms/teacher/inbox/approve" && request.method === "POST" && isTeacher) {
+  if (path === "/api/ms/teacher/inbox/approve" && request.method === "POST" && (isTeacher || isAdmin)) {
     const body = (await request.json().catch(() => ({}))) as any;
     const kind = String(body.kind || "");
     const id = Number(body.id || 0);
@@ -2074,7 +2159,7 @@ export async function handleMultiSchoolRequest(
     return jsonOut({ error: "نوع نامعتبر." }, 400);
   }
 
-  if (path === "/api/ms/teacher/points" && request.method === "POST" && isTeacher) {
+  if (path === "/api/ms/teacher/points" && request.method === "POST" && (isTeacher || isAdmin)) {
     const body = (await request.json().catch(() => ({}))) as any;
     const sid = Number(body.studentId || 0);
     const delta = Number(body.delta || 0);
@@ -2089,11 +2174,11 @@ export async function handleMultiSchoolRequest(
   }
 
   // ---- 🛒 فروشگاه (مدیریت معلم) ----
-  if (path === "/api/ms/teacher/shop" && request.method === "GET" && isTeacher) {
+  if (path === "/api/ms/teacher/shop" && request.method === "GET" && (isTeacher || isAdmin)) {
     const rows = await db.prepare("SELECT * FROM ms_shop_items WHERE school_id = ? AND active = 1 ORDER BY cost").bind(schoolId).all();
     return jsonOut({ items: (rows.results || []).map((i: any) => ({ id: Number(i.id), title: i.title, cost: Number(i.cost), active: Number(i.active) === 1 })) });
   }
-  if (path === "/api/ms/teacher/shop" && request.method === "POST" && isTeacher) {
+  if (path === "/api/ms/teacher/shop" && request.method === "POST" && (isTeacher || isAdmin)) {
     const body = (await request.json().catch(() => ({}))) as any;
     const title = String(body.title || "").trim();
     const cost = Number(body.cost || 0);
@@ -2104,14 +2189,14 @@ export async function handleMultiSchoolRequest(
       .run();
     return jsonOut({ ok: true });
   }
-  if (path === "/api/ms/teacher/shop/delete" && request.method === "POST" && isTeacher) {
+  if (path === "/api/ms/teacher/shop/delete" && request.method === "POST" && (isTeacher || isAdmin)) {
     const body = (await request.json().catch(() => ({}))) as any;
     await db.prepare("UPDATE ms_shop_items SET active = 0 WHERE id = ? AND school_id = ?").bind(Number(body.id || 0), schoolId).run();
     return jsonOut({ ok: true });
   }
 
   // ---- 📂 کتابخانه (مدیریت معلم) ----
-  if (path === "/api/ms/teacher/library" && request.method === "POST" && isTeacher) {
+  if (path === "/api/ms/teacher/library" && request.method === "POST" && (isTeacher || isAdmin)) {
     const body = (await request.json().catch(() => ({}))) as any;
     const title = String(body.title || "").trim();
     if (title.length < 2) return jsonOut({ error: "عنوان جزوه کوتاه است." }, 400);
@@ -2121,10 +2206,95 @@ export async function handleMultiSchoolRequest(
       .run();
     return jsonOut({ ok: true });
   }
-  if (path === "/api/ms/teacher/library/delete" && request.method === "POST" && isTeacher) {
+  if (path === "/api/ms/teacher/library/delete" && request.method === "POST" && (isTeacher || isAdmin)) {
     const body = (await request.json().catch(() => ({}))) as any;
     await db.prepare("DELETE FROM ms_library WHERE id = ? AND school_id = ?").bind(Number(body.id || 0), schoolId).run();
     return jsonOut({ ok: true });
+  }
+  // ---- ⏰ ددلاین‌ها و امتحانات ----
+  const teachHasClass = async (cid: number): Promise<boolean> => {
+    if (isAdmin) return true;
+    const trow: any = await db.prepare("SELECT subjects FROM ms_teachers WHERE id = ? AND school_id = ?").bind(Number(tok.userId || 0), schoolId).first();
+    if (!trow) return false;
+    try {
+      const subs = JSON.parse(String(trow.subjects || "{}"));
+      return String(cid) in subs;
+    } catch {
+      return false;
+    }
+  };
+  if (path === "/api/ms/teacher/deadlines" && request.method === "GET" && (isTeacher || isAdmin)) {
+    const cid = Number(url.searchParams.get("classId") || 0);
+    const cls: any = await db.prepare("SELECT * FROM ms_classes WHERE id = ? AND school_id = ?").bind(cid, schoolId).first();
+    if (!cls || !(await teachHasClass(cid))) return jsonOut({ error: "این کلاس در اختیار شما نیست." }, 403);
+    const rows = await db.prepare("SELECT * FROM ms_deadlines WHERE class_id = ? AND school_id = ? ORDER BY date").bind(cid, schoolId).all();
+    return jsonOut({ deadlines: (rows.results || []).map((d: any) => ({ id: Number(d.id), title: d.title, date: d.date })) });
+  }
+  if (path === "/api/ms/teacher/deadlines" && request.method === "POST" && (isTeacher || isAdmin)) {
+    const body = (await request.json().catch(() => ({}))) as any;
+    const cid = Number(body.classId || 0);
+    const cls: any = await db.prepare("SELECT * FROM ms_classes WHERE id = ? AND school_id = ?").bind(cid, schoolId).first();
+    if (!cls || !(await teachHasClass(cid))) return jsonOut({ error: "این کلاس در اختیار شما نیست." }, 403);
+    const title = String(body.title || "").trim().slice(0, 200);
+    const date = String(body.date || "").trim().slice(0, 30);
+    if (!title || !date) return jsonOut({ error: "عنوان و تاریخ لازم است." }, 400);
+    await db.prepare("INSERT INTO ms_deadlines (school_id, class_id, title, date, created_at) VALUES (?, ?, ?, ?, ?)").bind(schoolId, cid, title, date, nowIso()).run();
+    return jsonOut({ ok: true });
+  }
+  if (path === "/api/ms/teacher/deadlines/delete" && request.method === "POST" && (isTeacher || isAdmin)) {
+    const body = (await request.json().catch(() => ({}))) as any;
+    await db.prepare("DELETE FROM ms_deadlines WHERE id = ? AND school_id = ?").bind(Number(body.id || 0), schoolId).run();
+    return jsonOut({ ok: true });
+  }
+  // ---- 🆘 مباحث گنگ ----
+  if (path === "/api/ms/teacher/muddy" && request.method === "GET" && (isTeacher || isAdmin)) {
+    const rows = await db
+      .prepare(
+        `SELECT mm.*, s.name AS student_name, s.class_id FROM ms_muddy mm JOIN ms_students s ON s.id = mm.student_id
+         WHERE mm.school_id = ? ORDER BY mm.id DESC LIMIT 50`
+      )
+      .bind(schoolId)
+      .all();
+    return jsonOut({
+      muddy: (rows.results || []).map((m: any) => ({
+        id: Number(m.id), studentId: Number(m.student_id), studentName: m.student_name,
+        classId: Number(m.class_id), topic: m.topic, status: m.status,
+        date: String(m.created_at || "").split("T")[0],
+      })),
+    });
+  }
+  if (path === "/api/ms/teacher/muddy/resolve" && request.method === "POST" && (isTeacher || isAdmin)) {
+    const body = (await request.json().catch(() => ({}))) as any;
+    await db.prepare("UPDATE ms_muddy SET status = 'resolved' WHERE id = ? AND school_id = ?").bind(Number(body.id || 0), schoolId).run();
+    return jsonOut({ ok: true });
+  }
+  // ---- 🏅 لوح تقدیر و افتخارات ----
+  if (path === "/api/ms/teacher/certificates" && request.method === "POST" && (isTeacher || isAdmin)) {
+    const body = (await request.json().catch(() => ({}))) as any;
+    const st: any = await db.prepare("SELECT * FROM ms_students WHERE id = ? AND school_id = ?").bind(Number(body.studentId || 0), schoolId).first();
+    if (!st) return jsonOut({ error: "دانش‌آموز یافت نشد." }, 404);
+    const title = String(body.title || "").trim().slice(0, 200) || "لوح تقدیر";
+    const text = String(body.body || "").trim().slice(0, 2000);
+    await db
+      .prepare("INSERT INTO ms_certificates (school_id, class_id, student_id, title, body, created_at) VALUES (?, ?, ?, ?, ?, ?)")
+      .bind(schoolId, Number(st.class_id), Number(st.id), title, text, nowIso())
+      .run();
+    return jsonOut({ ok: true });
+  }
+  if (path === "/api/ms/teacher/certificates" && request.method === "GET" && (isTeacher || isAdmin)) {
+    const rows = await db
+      .prepare(
+        `SELECT c.*, s.name AS student_name FROM ms_certificates c JOIN ms_students s ON s.id = c.student_id
+         WHERE c.school_id = ? ORDER BY c.id DESC LIMIT 50`
+      )
+      .bind(schoolId)
+      .all();
+    return jsonOut({
+      certificates: (rows.results || []).map((c: any) => ({
+        id: Number(c.id), studentId: Number(c.student_id), studentName: c.student_name,
+        title: c.title, body: c.body, date: String(c.created_at || "").split("T")[0],
+      })),
+    });
   }
 
   return jsonOut({ error: "مسیر یافت نشد." }, 404);

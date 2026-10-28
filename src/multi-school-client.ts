@@ -249,7 +249,7 @@ const SCHOOL_JS = String.raw`
         session = r.session;
         localStorage.setItem("ms_session", JSON.stringify(session));
         msData = null;
-        activeTab = "home";
+        activeTab = (NAVS[session.role] && NAVS[session.role].length ? NAVS[session.role][0].id : "home");
         showToast("خوش آمدید " + (session.name || "") + " 🌟");
         renderApp();
       } catch (e) { showToast("❌ " + e.message); }
@@ -259,23 +259,36 @@ const SCHOOL_JS = String.raw`
     var NAVS = {
       student: [
         { id: "home", icon: "🏠", label: "خانه" },
+        { id: "ai", icon: "❓", label: "پرسش AI" },
         { id: "lab", icon: "🧠", label: "کارگاه" },
-        { id: "hw", icon: "📚", label: "تکالیف" },
         { id: "live", icon: "🎥", label: "کلاس آنلاین" },
-        { id: "report", icon: "📊", label: "کارنامه من" }
+        { id: "quiz", icon: "🎮", label: "رقابت" },
+        { id: "history", icon: "📜", label: "سوابق" }
       ],
       parent: [
-        { id: "home", icon: "🏠", label: "خانه" },
-        { id: "hw", icon: "📚", label: "تکالیف" },
-        { id: "report", icon: "📊", label: "کارنامه فرزندم" },
-        { id: "announce", icon: "📢", label: "اطلاعیه‌ها" }
+        { id: "report", icon: "📊", label: "کارنامه زنده" },
+        { id: "att", icon: "📅", label: "حضور و تکالیف" },
+        { id: "certs", icon: "🏅", label: "افتخارات" },
+        { id: "chat", icon: "💬", label: "ارتباط با معلم" }
       ],
       teacher: [
-        { id: "home", icon: "🏠", label: "داشبورد" },
+        { id: "dash", icon: "📊", label: "داشبورد" },
+        { id: "live", icon: "🎥", label: "کلاس آنلاین" },
         { id: "inbox", icon: "📥", label: "صندوق تایید" },
-        { id: "hw", icon: "📚", label: "تکالیف" },
-        { id: "att", icon: "✅", label: "حضورورغیاب" },
-        { id: "live", icon: "🎥", label: "کلاس آنلاین" }
+        { id: "att", icon: "✅", label: "حضوروغیاب" },
+        { id: "ai", icon: "🤖", label: "ابزار هوش" },
+        { id: "class", icon: "🏆", label: "کلاس و کدها" },
+        { id: "pchat", icon: "💬", label: "پیام اولیا" }
+      ],
+      admin: [
+        { id: "dash", icon: "📊", label: "داشبورد" },
+        { id: "live", icon: "🎥", label: "کلاس آنلاین" },
+        { id: "inbox", icon: "📥", label: "صندوق تایید" },
+        { id: "att", icon: "✅", label: "حضوروغیاب" },
+        { id: "ai", icon: "🤖", label: "ابزار هوش" },
+        { id: "class", icon: "🏆", label: "کلاس و کدها" },
+        { id: "pchat", icon: "💬", label: "پیام اولیا" },
+        { id: "admin", icon: "🏫", label: "مدیریت" }
       ],
       admin: [
         { id: "home", icon: "🏠", label: "داشبورد" },
@@ -408,6 +421,8 @@ const SCHOOL_JS = String.raw`
                 '<button class="menu-item" onclick="activeTab=\'msg\';renderApp()"><span>💬</span>پیام به معلم</button>' +
                 '<button class="menu-item" onclick="activeTab=\'history\';renderApp()"><span>📜</span>سوابق من</button>' +
                 '<button class="menu-item" onclick="activeTab=\'announce\';renderApp()"><span>📢</span>اطلاعیه‌ها</button>' +
+                '<button class="menu-item" onclick="activeTab=\'muddy\';renderApp()"><span>🆘</span>مباحث گنگ</button>' +
+                '<button class="menu-item" onclick="activeTab=\'certs\';renderApp()"><span>🏅</span>افتخارات</button>' +
               '</div>' +
             '</div>' +
             (session.role === "student"
@@ -466,6 +481,18 @@ const SCHOOL_JS = String.raw`
           return;
         } else if (activeTab === "history") {
           await renderHistory(main);
+          return;
+        } else if (activeTab === "att" && session.role === "parent") {
+          await renderParentAtt(main);
+          return;
+        } else if (activeTab === "certs") {
+          await renderCerts(main);
+          return;
+        } else if (activeTab === "chat" || activeTab === "msg") {
+          await renderMessages(main);
+          return;
+        } else if (activeTab === "muddy") {
+          await renderMuddy(main);
           return;
         } else if (activeTab === "ai") {
           renderAiPanel(main);
@@ -541,34 +568,29 @@ const SCHOOL_JS = String.raw`
           return;
         }
         resolveSelClass();
-        if (activeTab === "home") {
-          var d = await ensureTcClass();
-          if (!d) { main.innerHTML = classSwitcherHtml(); return; }
-          main.innerHTML =
-            classSwitcherHtml() +
-            '<div class="section-title">👥 دانش‌آموزان کلاس ' + esc(d.class.label) + '</div>' +
-            '<div class="card"><table class="table"><thead><tr><th>#</th><th>نام</th><th>امروز</th></tr></thead><tbody>' +
-            (d.roster || []).map(function (s, i) {
-              var st = s.todayStatus === "present" ? '✅' : (s.todayStatus === "absent" ? '❌' : (s.todayStatus === "late" ? '⏰' : '—'));
-              return '<tr><td>' + (i + 1) + '</td><td>' + esc(s.name) + '</td><td>' + st + '</td></tr>';
-            }).join("") +
-            '</tbody></table></div>' +
-            '<div class="card" style="margin-top:10px;">' +
-              '<div class="section-title">⚡ دسترسی سریع</div>' +
-              '<div class="menu-grid">' +
-                '<button class="menu-item" onclick="goTab(\'att\')"><span>✅</span>حضورورغیاب</button>' +
-                '<button class="menu-item" onclick="goTab(\'grades\')"><span>📝</span>نمرات</button>' +
-                '<button class="menu-item" onclick="goTab(\'hw\')"><span>📚</span>تکالیف</button>' +
-                '<button class="menu-item" onclick="goTab(\'inbox\')"><span>📥</span>صندوق تایید</button>' +
-                '<button class="menu-item" onclick="activeTab=\'ait\';renderApp()"><span>🤖</span>ابزار هوش مصنوعی</button>' +
-                '<button class="menu-item" onclick="goTab(\'live\')"><span>🎥</span>کلاس آنلاین</button>' +
-                '<button class="menu-item" onclick="activeTab=\'shopm\';renderApp()"><span>🛒</span>فروشگاه جوایز</button>' +
-                '<button class="menu-item" onclick="activeTab=\'libm\';renderApp()"><span>📂</span>کتابخانه</button>' +
-                '<button class="menu-item" onclick="activeTab=\'msgm\';renderApp()"><span>💬</span>پیام‌های دانش‌آموزان</button>' +
-                '<button class="menu-item" onclick="activeTab=\'announce\';renderApp()"><span>📢</span>اطلاعیه</button>' +
-              '</div>' +
-            '</div>';
+        if (activeTab === "dash" || activeTab === "home") {
+          await renderTcDash(main);
+          return;
+        } else if (activeTab === "class") {
+          await renderClassCodes(main);
+          return;
+        } else if (activeTab === "deadlines") {
+          await renderDeadlines(main);
+          return;
+        } else if (activeTab === "ai" || activeTab === "ait" || activeTab === "lab" || activeTab === "labtool") {
+          await renderLab(main);
+          return;
+        } else if (activeTab === "pchat" || activeTab === "msgm") {
+          await renderMsgM(main);
+          return;
+        } else if (activeTab === "hw") {
+          await renderTeacherHw(main);
+          return;
+        } else if (activeTab === "inbox") {
+          await renderInbox(main);
+          return;
         } else if (activeTab === "att") {
+
           var d2 = await ensureTcClass();
           if (!d2) { main.innerHTML = classSwitcherHtml(); return; }
           main.innerHTML =
@@ -589,6 +611,7 @@ const SCHOOL_JS = String.raw`
               '<button class="btn btn-emerald" style="margin-top:12px;" onclick="saveAttendance()">💾 ذخیره حضور و غیاب</button>' +
             '</div>';
         } else if (activeTab === "grades") {
+
           var d3 = await ensureTcClass();
           if (!d3) { main.innerHTML = classSwitcherHtml(); return; }
           main.innerHTML =
@@ -613,26 +636,17 @@ const SCHOOL_JS = String.raw`
                 }).join("")
               : '<tr><td colspan="3" class="muted">هنوز نمره‌ای ثبت نشده است.</td></tr>') +
             '</tbody></table></div>';
-        } else if (activeTab === "hw") {
-          await renderTeacherHw(main);
-          return;
-        } else if (activeTab === "inbox") {
-          await renderInbox(main);
-          return;
-        } else if (activeTab === "ait" || activeTab === "lab" || activeTab === "labtool") {
-          await renderLab(main);
-          return;
         } else if (activeTab === "shopm") {
           await renderShopM(main);
           return;
         } else if (activeTab === "libm") {
           await renderLibM(main);
           return;
-        } else if (activeTab === "msgm") {
-          await renderMsgM(main);
-          return;
         } else if (activeTab === "announce") {
           renderAnnounceForm(main);
+          return;
+        } else if (activeTab === "admin" && session.role === "admin") {
+          renderAdmin(main);
           return;
         }
       } catch (e) {
@@ -1925,46 +1939,88 @@ const SCHOOL_JS = String.raw`
     async function renderInbox(main) {
       main.innerHTML = '<div class="card" style="text-align:center;">⏳ ...</div>';
       try {
+        if (!msData) await ensureHome();
+        resolveSelClass();
         var d = await api("/api/ms/teacher/inbox");
-        var sec = function (title, rows, kind, render) {
-          return '<div class="section-title">' + title + '</div>' +
-            (rows.length ? rows.map(render).join("") : '<div class="card"><div class="muted">موردی در انتظار تایید نیست.</div></div>');
-        };
+        var asg = await api("/api/ms/teacher/assignments?classId=" + selClassId);
+        var subSections = "";
+        for (var ai = 0; ai < ((asg.assignments || []).length); ai++) {
+          var a = asg.assignments[ai];
+          var sd = await api("/api/ms/teacher/submissions?assignmentId=" + a.id);
+          var rows = (sd.submissions || []).filter(function (x) { return x.submitted; });
+          if (!rows.length) continue;
+          subSections += rows.map(function (x) {
+            return '<div class="card">' +
+              '<b>👤 ' + esc(x.name) + '</b> — 📚 ' + esc(a.title) +
+              (x.reviewed ? ' <span class="badge-pill" style="background:rgba(16,185,129,0.2);color:#6EE7B7;">تصحیح شد</span>' : ' <span class="badge-pill" style="background:rgba(245,158,11,0.2);color:#FCD34D;">در انتظار تصحیح</span>') +
+              (x.text ? '<div style="margin:7px 0;padding:9px 11px;background:var(--surface-2);border-radius:11px;font-size:12.5px;">' + esc(x.text) + '</div>' : '') +
+              (x.photo ? '<img src="' + x.photo + '" style="width:100%;max-height:220px;object-fit:contain;border-radius:11px;cursor:pointer;margin:6px 0;" onclick="viewPhoto(this.src)" />' : '') +
+              '<div style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap;">' +
+                '<input id="revScore_' + x.submissionId + '" class="input" type="number" step="0.25" dir="ltr" placeholder="نمره" style="width:95px;margin:0;" value="' + (x.score !== null ? x.score : "") + '" />' +
+                '<input id="revFb_' + x.submissionId + '" class="input" placeholder="بازخورد..." style="flex:1;min-width:140px;margin:0;" value="' + esc(x.feedback) + '" />' +
+                '<button class="btn btn-emerald btn-sm" onclick="saveReview(' + x.submissionId + ')">✅ ثبت نمره</button>' +
+              '</div></div>';
+          }).join("");
+        }
+        var muddy = await api("/api/ms/teacher/muddy").catch(function () { return { muddy: [] }; });
         main.innerHTML =
-          sec("🎯 ماموریت‌های روز در انتظار تایید", d.missions || [], "mission", function (m) {
+          classSwitcherHtml() +
+          '<div class="section-title">📝 تکالیف ارسالی دانش‌آموزان (مشاهده تصویر، متن و تصحیح)</div>' +
+          (subSections || '<div class="card"><div class="muted">هنوز تکلیفی ارسال نشده است.</div></div>') +
+          '<div class="section-title">🎯 ماموریت‌های روز در انتظار تایید</div>' +
+          ((d.missions || []).length ? d.missions.map(function (m) {
             return '<div class="card">' +
               '<b>👤 ' + esc(m.studentName) + '</b>' +
               '<div class="muted" style="font-size:12px;margin:5px 0;">🎯 ' + esc(m.mission) + '</div>' +
               '<div style="padding:8px 10px;background:var(--surface-2);border-radius:10px;font-size:12.5px;">📝 ' + esc(m.proof) + '</div>' +
               '<div style="display:flex;gap:7px;margin-top:8px;flex-wrap:wrap;">' +
-                '<input id="pts_mission_' + m.id + '" class="input" type="number" dir="ltr" placeholder="⭐ امتیاز" style="width:90px;margin:0;" value="5" />' +
-                '<input id="fb_mission_' + m.id + '" class="input" placeholder="بازخورد (اختیاری)" style="flex:1;min-width:120px;margin:0;" />' +
-                '<button class="btn btn-emerald btn-sm" onclick="approveInbox(\'mission\',' + m.id + ',\'approve\')">✅ تایید</button>' +
+                '<input id="pts_mission_' + m.id + '" class="input" type="number" dir="ltr" placeholder="⭐" style="width:80px;margin:0;" value="5" />' +
+                '<input id="fb_mission_' + m.id + '" class="input" placeholder="بازخورد (اختیاری)" style="flex:1;min-width:110px;margin:0;" />' +
+                '<button class="btn btn-emerald btn-sm" onclick="approveInbox(\'mission\',' + m.id + ',\'approve\')">✅</button>' +
                 '<button class="btn btn-rose btn-sm" onclick="approveInbox(\'mission\',' + m.id + ',\'reject\')">❌</button>' +
               '</div></div>';
-          }) +
-          sec("🧠 گزارش‌های کارگاه در انتظار تایید", d.labs || [], "lab", function (l) {
+          }).join("") : '<div class="card"><div class="muted">موردی در انتظار نیست.</div></div>') +
+          '<div class="section-title">🧠 گزارش‌های کارگاه در انتظار تایید</div>' +
+          ((d.labs || []).length ? d.labs.map(function (l) {
             return '<div class="card">' +
               '<b>👤 ' + esc(l.studentName) + '</b> <span class="badge-pill" style="background:rgba(99,102,241,0.18);color:#C7D2FE;">' + esc(l.tool) + '</span>' +
               (l.topic ? '<div class="muted" style="font-size:12px;margin:5px 0;">📌 ' + esc(l.topic) + '</div>' : '') +
               '<div style="padding:8px 10px;background:var(--surface-2);border-radius:10px;font-size:12.5px;">📝 ' + esc(l.summary) + '</div>' +
               '<div style="display:flex;gap:7px;margin-top:8px;flex-wrap:wrap;">' +
-                '<input id="pts_lab_' + l.id + '" class="input" type="number" dir="ltr" placeholder="⭐ امتیاز" style="width:90px;margin:0;" value="10" />' +
-                '<input id="fb_lab_' + l.id + '" class="input" placeholder="بازخورد (اختیاری)" style="flex:1;min-width:120px;margin:0;" />' +
-                '<button class="btn btn-emerald btn-sm" onclick="approveInbox(\'lab\',' + l.id + ',\'approve\')">✅ تایید</button>' +
+                '<input id="pts_lab_' + l.id + '" class="input" type="number" dir="ltr" placeholder="⭐" style="width:80px;margin:0;" value="10" />' +
+                '<input id="fb_lab_' + l.id + '" class="input" placeholder="بازخورد (اختیاری)" style="flex:1;min-width:110px;margin:0;" />' +
+                '<button class="btn btn-emerald btn-sm" onclick="approveInbox(\'lab\',' + l.id + ',\'approve\')">✅</button>' +
                 '<button class="btn btn-rose btn-sm" onclick="approveInbox(\'lab\',' + l.id + ',\'reject\')">❌</button>' +
               '</div></div>';
-          }) +
-          sec("🛒 سفارش‌های فروشگاه در انتظار تایید", d.orders || [], "order", function (o) {
+          }).join("") : '<div class="card"><div class="muted">موردی در انتظار نیست.</div></div>') +
+          '<div class="section-title">🛒 درخواست‌های خرید فروشگاه جوایز</div>' +
+          ((d.orders || []).length ? d.orders.map(function (o) {
             return '<div class="card">' +
               '<b>👤 ' + esc(o.studentName) + '</b> — 🎁 ' + esc(o.itemTitle) + ' (' + o.cost + ' ⭐)' +
               '<div style="display:flex;gap:7px;margin-top:8px;">' +
                 '<button class="btn btn-emerald btn-sm" onclick="approveInbox(\'order\',' + o.id + ',\'approve\')">✅ تحویل جایزه</button>' +
                 '<button class="btn btn-rose btn-sm" onclick="approveInbox(\'order\',' + o.id + ',\'reject\')">❌ رد</button>' +
               '</div></div>';
-          }) +
+          }).join("") : '<div class="card"><div class="muted">موردی در انتظار نیست.</div></div>') +
+          '<div class="section-title">🆘 مباحث گنگ گزارش‌شده توسط دانش‌آموزان (' + ((muddy.muddy || []).filter(function (m) { return m.status === "open"; }).length) + ')</div>' +
+          ((muddy.muddy || []).length ? muddy.muddy.map(function (m) {
+            return '<div class="card" style="display:flex;align-items:center;justify-content:space-between;gap:8px;">' +
+              '<div><b>👤 ' + esc(m.studentName) + '</b><div class="muted" style="font-size:12px;">' + esc(m.topic) + ' — ' + esc(m.date) + '</div></div>' +
+              (m.status === "open"
+                ? '<button class="btn btn-emerald btn-sm" onclick="resolveMuddy(' + m.id + ')">✅ حل شد</button>'
+                : '<span class="badge-pill" style="background:rgba(16,185,129,0.2);color:#6EE7B7;">بررسی شد</span>') +
+              '</div>';
+          }).join("") : '<div class="card"><div class="muted">گزارشی ثبت نشده است.</div></div>') +
           backBtnHtml();
       } catch (e) { main.innerHTML = '<div class="card">❌ ' + esc(e.message) + '</div>'; }
+    }
+
+    async function resolveMuddy(id) {
+      try {
+        await api("/api/ms/teacher/muddy/resolve", { id: id });
+        showToast("✅ بررسی شد.");
+        renderApp();
+      } catch (e) { showToast("❌ " + e.message); }
     }
 
     async function approveInbox(kind, id, decision) {
@@ -2092,6 +2148,254 @@ const SCHOOL_JS = String.raw`
       } catch (e) { showToast("❌ " + e.message); }
     }
 
+    // ==================== 📊 پنل‌های نسخه‌ای معلم/مدیر (مثل نسخه قبل) ====================
+    async function renderTcDash(main) {
+      main.innerHTML = '<div class="card" style="text-align:center;">⏳ ...</div>';
+      try {
+        if (!msData) await ensureHome();
+        resolveSelClass();
+        var d = await ensureTcClass();
+        if (!d) { main.innerHTML = classSwitcherHtml(); return; }
+        var present = (d.roster || []).filter(function (x) { return x.todayStatus === "present"; }).length;
+        var inbox = await api("/api/ms/teacher/inbox").catch(function () { return { missions: [], labs: [], orders: [] }; });
+        var pendCount = (inbox.missions || []).length + (inbox.labs || []).length + (inbox.orders || []).length;
+        main.innerHTML =
+          classSwitcherHtml() +
+          '<div class="card hero-card">' +
+            '<div style="font-size:17px;font-weight:800;color:var(--gold-light);">👨‍🏫 داشبورد زنده مدیریت کلاس</div>' +
+            '<div class="muted" style="margin-top:4px;">مدرسه ' + esc((msData.school && msData.school.name) || "") + '</div>' +
+            '<div class="grid-3" style="margin-top:12px;">' +
+              '<div class="stat-card"><div class="stat-ico">👥</div><div class="stat-num">' + (d.roster || []).length + '</div><div class="stat-label">دانش‌آموز</div></div>' +
+              '<div class="stat-card"><div class="stat-ico">✅</div><div class="stat-num">' + present + '</div><div class="stat-label">حاضر امروز</div></div>' +
+              '<div class="stat-card"><div class="stat-ico">📥</div><div class="stat-num">' + pendCount + '</div><div class="stat-label">در انتظار تایید</div></div>' +
+            '</div>' +
+            '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;">' +
+              '<button class="btn btn-emerald btn-sm" onclick="goTab(\'att\')">✅ حضور و غیاب امروز</button>' +
+              '<button class="btn btn-gold btn-sm" onclick="goTab(\'live\')">🎥 شروع کلاس آنلاین</button>' +
+              '<button class="btn btn-ghost btn-sm" onclick="activeTab=\'announce\';renderApp()">📢 اطلاعیه همگانی</button>' +
+            '</div>' +
+          '</div>' +
+          '<div class="card"><div class="section-title">📚 منوی امکانات</div>' +
+            '<div class="menu-grid">' +
+              '<button class="menu-item" onclick="goTab(\'inbox\')"><span>📥</span>صندوق تایید</button>' +
+              '<button class="menu-item" onclick="goTab(\'grades\')"><span>📝</span>ثبت نمره</button>' +
+              '<button class="menu-item" onclick="goTab(\'hw\')"><span>📚</span>تکالیف</button>' +
+              '<button class="menu-item" onclick="goTab(\'ai\')"><span>🤖</span>ابزار هوش مصنوعی</button>' +
+              '<button class="menu-item" onclick="goTab(\'class\')"><span>🏆</span>کلاس و کدها</button>' +
+              '<button class="menu-item" onclick="goTab(\'pchat\')"><span>💬</span>پیام اولیا</button>' +
+              '<button class="menu-item" onclick="activeTab=\'shopm\';renderApp()"><span>🛒</span>فروشگاه جوایز</button>' +
+              '<button class="menu-item" onclick="activeTab=\'libm\';renderApp()"><span>📂</span>کتابخانه</button>' +
+              '<button class="menu-item" onclick="activeTab=\'deadlines\';renderApp()"><span>⏰</span>ددلاین و امتحان</button>' +
+            '</div>' +
+            (session.role === "admin"
+              ? '<div class="section-title">🏫 مدیریت مدرسه</div><div class="menu-grid">' +
+                '<button class="menu-item" onclick="goTab(\'admin\')"><span>🏫</span>مدیریت مدرسه</button></div>'
+              : "") +
+          '</div>' +
+          '<div class="section-title">📢 اطلاعیه‌های اخیر</div>' +
+          ((msData.announcements || []).length
+            ? msData.announcements.slice(0, 5).map(function (a) {
+                return '<div class="card"><b>📢 ' + esc(a.title) + '</b><div class="muted" style="font-size:12px;white-space:pre-wrap;">' + esc(a.body) + '</div></div>';
+              }).join("")
+            : '<div class="card"><div class="muted">اطلاعیه‌ای نیست.</div></div>') +
+          backBtnHtml();
+      } catch (e) { main.innerHTML = '<div class="card">❌ ' + esc(e.message) + '</div>'; }
+    }
+
+    var teamsState = null;
+    async function renderClassCodes(main) {
+      main.innerHTML = '<div class="card" style="text-align:center;">⏳ ...</div>';
+      try {
+        if (!msData) await ensureHome();
+        resolveSelClass();
+        var d = await ensureTcClass();
+        if (!d) { main.innerHTML = classSwitcherHtml(); return; }
+        var certs = await api("/api/ms/teacher/certificates").catch(function () { return { certificates: [] }; });
+        var codeOf = function (x, k1, k2) { return x[k1] || x[k2] || "—"; };
+        main.innerHTML =
+          classSwitcherHtml() +
+          '<div class="section-title">🏆 کلاس و کدهای ورود — ' + esc(d.class.label) + '</div>' +
+          '<div class="card"><table class="table"><thead><tr><th>نام</th><th>🎒 کد دانش‌آموز</th><th>👪 کد والدین</th><th>🏅</th></tr></thead><tbody>' +
+          (d.roster || []).map(function (x) {
+            return '<tr>' +
+              '<td>' + esc(x.name) + '</td>' +
+              '<td><b dir="ltr">' + esc(codeOf(x, "studentCode", "student_code")) + '</b><div class="muted" style="font-size:10px;">PIN: 1234</div></td>' +
+              '<td><b dir="ltr">' + esc(codeOf(x, "parentCode", "parent_code")) + '</b></td>' +
+              '<td><button class="btn btn-gold btn-sm" onclick="issueCert(' + x.id + ',\'' + esc(x.name) + '\')">🏅</button></td>' +
+            '</tr>';
+          }).join("") +
+          '</tbody></table></div>' +
+          '<div class="section-title">🏅 لوح‌های تقدیر صادرشده</div>' +
+          ((certs.certificates || []).length
+            ? certs.certificates.map(function (c) {
+                return '<div class="card" style="display:flex;align-items:center;justify-content:space-between;">' +
+                  '<div><b>🏅 ' + esc(c.title) + '</b> — ' + esc(c.studentName) + '<div class="muted" style="font-size:11px;">' + esc(c.date) + '</div></div></div>';
+              }).join("")
+            : '<div class="card"><div class="muted">هنوز لوحی صادر نشده است.</div></div>') +
+          '<div class="section-title">👥 گروه‌بندی هوشمند متعادل</div>' +
+          '<div class="card">' +
+            '<button class="btn btn-ghost" onclick="buildTeams()">🎲 ساخت گروه‌های متعادل</button>' +
+            (teamsState ? teamsState : "") +
+          '</div>' +
+          backBtnHtml();
+      } catch (e) { main.innerHTML = '<div class="card">❌ ' + esc(e.message) + '</div>'; }
+    }
+
+    function issueCert(studentId, name) {
+      var title = prompt("عنوان لوح تقدیر برای " + name + " (مثلاً: دانش‌آموز ماه):", "لوح تقدیر");
+      if (!title) return;
+      var body = prompt("متن تقدیر:", "به پاس تلاش و پیشرفت چشم‌گیر، این لوح تقدیر تقدیم می‌شود.");
+      api("/api/ms/teacher/certificates", { studentId: studentId, title: title, body: body || "" }).then(function () {
+        showToast("🏅 لوح تقدیر صادر شد.");
+        renderApp();
+      }).catch(function (e) { showToast("❌ " + e.message); });
+    }
+
+    function buildTeams() {
+      var names = [];
+      var rows = document.querySelectorAll("table.table tbody tr");
+      rows.forEach(function (tr) {
+        var tds = tr.querySelectorAll("td");
+        if (tds.length && tds[0]) names.push(tds[0].textContent.trim());
+      });
+      if (names.length < 2) { showToast("ابتدا کلاس را باز کنید"); return; }
+      names.sort(function () { return Math.random() - 0.5; });
+      var teamNames = ["🌟 تیم ستاره‌ها", "🚀 تیم فضانوردان", "📚 تیم کاوشگران", "⚡ تیم رعد"];
+      var n = Math.min(4, Math.max(2, Math.ceil(names.length / 3)));
+      var teams = Array.from({ length: n }, function (_, i) { return []; });
+      names.forEach(function (nm, i) { teams[i % n].push(nm); });
+      teamsState = '<div class="grid-3" style="margin-top:10px;">' + teams.map(function (t, i) {
+        return '<div style="padding:10px;background:var(--surface-2);border-radius:11px;">' +
+          '<b style="color:var(--gold-light);">' + teamNames[i] + '</b>' +
+          t.map(function (nm) { return '<div class="muted" style="font-size:11.5px;">• ' + esc(nm) + '</div>'; }).join("") +
+          '</div>';
+      }).join("") + '</div>';
+      renderApp();
+    }
+
+    async function renderDeadlines(main) {
+      main.innerHTML = '<div class="card" style="text-align:center;">⏳ ...</div>';
+      try {
+        if (!msData) await ensureHome();
+        resolveSelClass();
+        var d = await api("/api/ms/teacher/deadlines?classId=" + selClassId);
+        main.innerHTML =
+          classSwitcherHtml() +
+          '<div class="section-title">⏰ ثبت ددلاین یا تاریخ امتحان جدید</div>' +
+          '<div class="card">' +
+            '<input id="dlTitle" class="input" placeholder="عنوان (مثلاً: امتحان ریاضی فصل ۳)" />' +
+            '<input id="dlDate" class="input" type="date" dir="ltr" />' +
+            '<button class="btn btn-emerald" onclick="addDeadline()">➕ ثبت برای کلاس</button>' +
+          '</div>' +
+          '<div class="section-title">📅 برنامه‌های ثبت‌شده</div>' +
+          ((d.deadlines || []).length
+            ? d.deadlines.map(function (x) {
+                return '<div class="card" style="display:flex;align-items:center;justify-content:space-between;">' +
+                  '<div><b>⏰ ' + esc(x.title) + '</b><div class="muted" style="font-size:12px;">' + esc(x.date) + '</div></div>' +
+                  '<button class="btn btn-ghost btn-sm" onclick="delDeadline(' + x.id + ')">🗑</button></div>';
+              }).join("")
+            : '<div class="card"><div class="muted">برنامه‌ای ثبت نشده است.</div></div>') +
+          backBtnHtml();
+      } catch (e) { main.innerHTML = '<div class="card">❌ ' + esc(e.message) + '</div>'; }
+    }
+
+    async function addDeadline() {
+      try {
+        await api("/api/ms/teacher/deadlines", {
+          classId: selClassId,
+          title: (document.getElementById("dlTitle") || {}).value,
+          date: (document.getElementById("dlDate") || {}).value
+        });
+        showToast("✅ ثبت شد.");
+        renderApp();
+      } catch (e) { showToast("❌ " + e.message); }
+    }
+
+    async function delDeadline(id) {
+      if (!confirm("حذف شود؟")) return;
+      try {
+        await api("/api/ms/teacher/deadlines/delete", { id: id });
+        showToast("🗑 حذف شد.");
+        renderApp();
+      } catch (e) { showToast("❌ " + e.message); }
+    }
+
+    async function renderCerts(main) {
+      main.innerHTML = '<div class="card" style="text-align:center;">⏳ ...</div>';
+      try {
+        var d = await api("/api/ms/edu/certificates");
+        main.innerHTML =
+          '<div class="section-title">🏅 افتخارات و لوح‌های تقدیر</div>' +
+          ((d.certificates || []).length
+            ? d.certificates.map(function (c) {
+                return '<div class="cert-frame">' +
+                  '<div style="font-size:26px;">🏅</div>' +
+                  '<div class="cert-title">' + esc(c.title) + '</div>' +
+                  '<div style="font-size:13px;margin-top:8px;line-height:1.9;">' + esc(c.body) + '</div>' +
+                  '<div class="muted" style="margin-top:10px;">' + esc(c.date) + '</div>' +
+                '</div>';
+              }).join("")
+            : '<div class="card"><div class="muted">هنوز لوح تقدیری دریافت نکرده‌اید. تلاش کنید! 💪</div></div>') +
+          backBtnHtml();
+      } catch (e) { main.innerHTML = '<div class="card">❌ ' + esc(e.message) + '</div>'; }
+    }
+
+    async function renderMuddy(main) {
+      main.innerHTML = '<div class="card" style="text-align:center;">⏳ ...</div>';
+      try {
+        var d = await api("/api/ms/edu/muddy");
+        main.innerHTML =
+          '<div class="section-title">🆘 مباحث گنگ من</div>' +
+          '<div class="card">' +
+            '<div class="muted" style="font-size:12px;">هر مطلبی را که در کلاس متوجه نشدی اینجا بنویس تا معلم بررسی کند.</div>' +
+            '<input id="muddyTopic" class="input" placeholder="مثلاً: حل معادله درجه دوم را متوجه نشدم" />' +
+            '<button class="btn btn-emerald" onclick="addMuddy()">📤 ارسال به معلم</button>' +
+          '</div>' +
+          ((d.muddy || []).length
+            ? d.muddy.map(function (m) {
+                return '<div class="card" style="display:flex;align-items:center;justify-content:space-between;">' +
+                  '<div>🆘 ' + esc(m.topic) + '<div class="muted" style="font-size:11px;">' + esc(m.date) + '</div></div>' +
+                  (m.status === "open" ? ' <span class="badge-pill" style="background:rgba(245,158,11,0.2);color:#FCD34D;">در انتظار</span>' : ' <span class="badge-pill" style="background:rgba(16,185,129,0.2);color:#6EE7B7;">بررسی شد</span>') +
+                  '</div>';
+              }).join("")
+            : '<div class="card"><div class="muted">گزارشی ثبت نکرده‌اید.</div></div>') +
+          backBtnHtml();
+      } catch (e) { main.innerHTML = '<div class="card">❌ ' + esc(e.message) + '</div>'; }
+    }
+
+    async function addMuddy() {
+      try {
+        await api("/api/ms/edu/muddy", { topic: (document.getElementById("muddyTopic") || {}).value });
+        showToast("✅ برای معلم ارسال شد.");
+        renderApp();
+      } catch (e) { showToast("❌ " + e.message); }
+    }
+
+    async function renderParentAtt(main) {
+      main.innerHTML = '<div class="card" style="text-align:center;">⏳ ...</div>';
+      try {
+        var d = await ensureHome();
+        var asg = await api("/api/ms/student/assignments").catch(function () { return { assignments: [] }; });
+        var att = d.attendance || d.att || {};
+        main.innerHTML =
+          '<div class="section-title">📅 حضور و غیاب فرزند شما</div>' +
+          '<div class="grid-3">' +
+            '<div class="stat-card"><div class="stat-ico">✅</div><div class="stat-num">' + (att.present !== undefined ? att.present : (d.present || 0)) + '</div><div class="stat-label">حاضر</div></div>' +
+            '<div class="stat-card"><div class="stat-ico">❌</div><div class="stat-num">' + (att.absent !== undefined ? att.absent : (d.absent || 0)) + '</div><div class="stat-label">غایب</div></div>' +
+            '<div class="stat-card"><div class="stat-ico">⏰</div><div class="stat-num">' + (att.late !== undefined ? att.late : (d.late || 0)) + '</div><div class="stat-label">با تأخیر</div></div>' +
+          '</div>' +
+          '<div class="section-title">📚 تکالیف</div>' +
+          ((asg.assignments || []).length
+            ? asg.assignments.map(function (a) {
+                return '<div class="card"><b>📚 ' + esc(a.title) + '</b>' +
+                  (a.description ? '<div class="muted" style="font-size:12px;white-space:pre-wrap;">' + esc(a.description) + '</div>' : '') +
+                  '<div class="muted" style="font-size:11px;">' + (a.submitted ? '✅ ارسال شد' : '⏳ هنوز ارسال نشده') + (a.due ? ' — مهلت: ' + esc(a.due) : '') + '</div></div>';
+              }).join("")
+            : '<div class="card"><div class="muted">تکلیفی ثبت نشده است.</div></div>') +
+          backBtnHtml();
+      } catch (e) { main.innerHTML = '<div class="card">❌ ' + esc(e.message) + '</div>'; }
+    }
+
     // ==================== اطلاعیه‌ها ====================
     async function renderAnnounceList(main) {
       main.innerHTML = '<div class="card" style="text-align:center;">⏳ ...</div>';
@@ -2162,6 +2466,11 @@ const SCHOOL_JS = String.raw`
 
     // ==================== شروع ====================
     document.addEventListener("DOMContentLoaded", function () {
+      try {
+        if (session && NAVS[session.role] && NAVS[session.role].length && !NAVS[session.role].some(function (t) { return t.id === activeTab; })) {
+          activeTab = NAVS[session.role][0].id;
+        }
+      } catch (e) {}
       renderApp();
     });
 `;
@@ -2308,6 +2617,17 @@ export function buildSchoolHtml(): string {
       font-size: 13px; z-index: 3000; max-width: 92%; text-align: center;
       border: 1px solid rgba(148,163,184,0.25); box-shadow: 0 10px 30px rgba(0,0,0,0.4);
     }
+    .hero-card { background: linear-gradient(135deg, #1E1B4B 0%, #312E81 55%, #1E293B 100%); border: 1px solid var(--border); border-radius: 18px; padding: 16px; margin-bottom: 14px; }
+    .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; }
+    .stat-ico { font-size: 21px; }
+    .cert-frame {
+      border: 7px solid var(--gold); border-radius: 14px; padding: 20px 16px; margin: 12px 0;
+      background: linear-gradient(135deg, #1E293B, #0F172A); text-align: center;
+    }
+    .cert-title { font-size: 19px; font-weight: 900; color: var(--gold-light); }
+    .bubble { border-radius: 14px; padding: 9px 12px; margin-bottom: 8px; max-width: 88%; font-size: 12.5px; }
+    .bubble-me { background: var(--primary-dark); color: #fff; margin-left: auto; border-bottom-right-radius: 4px; }
+    .bubble-them { background: var(--surface-2); color: var(--text); margin-right: auto; border-bottom-left-radius: 4px; }
     .menu-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
     .menu-item {
       background: var(--surface-2); border: 1px solid var(--border); border-radius: 13px;

@@ -233,6 +233,19 @@ const SCHOOL_JS = String.raw`
       ]
     };
 
+    function applyTheme() {
+      var t = "dark";
+      try { t = localStorage.getItem("ms_theme") || "dark"; } catch (e) {}
+      document.documentElement.setAttribute("data-theme", t);
+    }
+    function toggleTheme() {
+      var cur = document.documentElement.getAttribute("data-theme") === "light" ? "dark" : "light";
+      document.documentElement.setAttribute("data-theme", cur);
+      try { localStorage.setItem("ms_theme", cur); } catch (e) {}
+      showToast(cur === "light" ? "☀️ تم روشن فعال شد" : "🌙 تم تیره فعال شد");
+    }
+    applyTheme();
+
     async function renderPass(main) {
       main = main || document.getElementById("mainView");
       main.innerHTML =
@@ -1158,7 +1171,7 @@ const SCHOOL_JS = String.raw`
     }
 
     // ==================== 📚 تکالیف + 🤖 هوش مصنوعی + 📝 کوییز ====================
-    var hwView = { assignmentId: 0 };
+    var hwView = { assignmentId: -1 };
     var hwPhotos = {};
     var aiHistory = [];
     var quizState = { topic: "", questions: [], answers: [] };
@@ -1339,12 +1352,12 @@ const SCHOOL_JS = String.raw`
       try {
         if (!msData) await ensureHome();
         resolveSelClass();
-        if (hwView.assignmentId) {
+        if (hwView.assignmentId >= 0) {
           var d = await api("/api/ms/teacher/submissions?assignmentId=" + hwView.assignmentId);
           main.innerHTML =
             classSwitcherHtml() +
             '<div class="section-title">📥 تکالیف ارسالی — ' + esc(d.assignment.title) + '</div>' +
-            '<div style="text-align:right;margin-bottom:10px;"><button class="btn btn-ghost btn-sm" onclick="hwView.assignmentId=0;renderApp()">🔙 بازگشت به لیست تکالیف</button></div>' +
+            '<div style="text-align:right;margin-bottom:10px;"><button class="btn btn-ghost btn-sm" onclick="hwView.assignmentId=-1;renderApp()">🔙 بازگشت به لیست تکالیف</button></div>' +
             (d.submissions || []).map(function (s) {
               if (!s.submitted) {
                 return '<div class="card"><b>' + esc(s.name) + '</b><div class="muted" style="font-size:12px;">❌ تکلیف ارسال نکرده است</div></div>';
@@ -1782,7 +1795,7 @@ const SCHOOL_JS = String.raw`
         var d = await api("/api/ms/edu/leaderboard");
         var medals = ["🥇", "🥈", "🥉"];
         main.innerHTML =
-          '<div class="section-title">🏆 برترین‌های مدرسه</div>' +
+          '<div class="section-title">🏆 امتیازها و رتبه‌بندی همه دانش‌آموزان مدرسه</div>' +
           '<div class="card"><table class="table"><thead><tr><th>#</th><th>نام</th><th>⭐ امتیاز</th></tr></thead><tbody>' +
           (d.top || []).map(function (x, i) {
             return '<tr' + (x.id === (session.studentId || 0) ? ' style="background:rgba(245,158,11,0.1);"' : '') + '>' +
@@ -1972,9 +1985,11 @@ const SCHOOL_JS = String.raw`
         var d = await api("/api/ms/teacher/inbox");
         var asg = await api("/api/ms/teacher/assignments?classId=" + selClassId);
         var subSections = "";
-        for (var ai = 0; ai < ((asg.assignments || []).length); ai++) {
-          var a = asg.assignments[ai];
-          var sd = await api("/api/ms/teacher/submissions?assignmentId=" + a.id);
+        var asgList = (asg.assignments || []).slice();
+        asgList.push({ id: 0, title: "تکلیف آزاد ارسالی" });
+        for (var ai = 0; ai < asgList.length; ai++) {
+          var a = asgList[ai];
+          var sd = await api("/api/ms/teacher/submissions?assignmentId=" + a.id).catch(function () { return { submissions: [] }; });
           var rows = (sd.submissions || []).filter(function (x) { return x.submitted && !x.reviewed; });
           if (!rows.length) continue;
           subSections += rows.map(function (x) {
@@ -2502,6 +2517,7 @@ const SCHOOL_JS = String.raw`
 
     // ==================== شروع ====================
     document.addEventListener("DOMContentLoaded", function () {
+      applyTheme();
       try {
         if (session && NAVS[session.role] && NAVS[session.role].length && !NAVS[session.role].some(function (t) { return t.id === activeTab; })) {
           activeTab = NAVS[session.role][0].id;
@@ -2530,6 +2546,20 @@ export function buildSchoolHtml(): string {
       --text: #F8FAFC; --muted: #94A3B8; --radius: 18px;
       --safe-bottom: env(safe-area-inset-bottom, 0px);
     }
+    [data-theme="light"] {
+      --bg: #EEF2F7; --surface: #FFFFFF; --surface-2: #F1F5F9;
+      --border: rgba(15, 23, 42, 0.12);
+      --primary: #4F46E5; --primary-dark: #4338CA;
+      --gold: #D97706; --gold-light: #A16207;
+      --emerald: #059669; --rose: #E11D48; --sky: #0284C7;
+      --text: #0F172A; --muted: #5B6B7F;
+    }
+    [data-theme="light"] .topbar { background: rgba(255, 255, 255, 0.93); box-shadow: 0 2px 14px rgba(15, 23, 42, 0.06); }
+    [data-theme="light"] .bottom-nav { background: rgba(255, 255, 255, 0.96); box-shadow: 0 -2px 14px rgba(15, 23, 42, 0.06); }
+    [data-theme="light"] .card, [data-theme="light"] .auth-card { box-shadow: 0 4px 18px rgba(15, 23, 42, 0.07); }
+    [data-theme="light"] .stat-card { background: var(--surface); }
+    [data-theme="light"] .menu-item { background: var(--surface-2); color: var(--text); }
+    [data-theme="light"] .input { background: var(--surface); color: var(--text); border-color: var(--border); }
     * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
     html, body {
       margin: 0; padding: 0; background: var(--bg); color: var(--text);
@@ -2685,6 +2715,7 @@ export function buildSchoolHtml(): string {
           <div class="brand-school" id="brandSchool">سامانه یکپارچه آموزشی</div>
         </div>
       </div>
+      <button id="themeBtn" class="icon-btn" onclick="toggleTheme()" title="تغییر تم">🌓</button>
       <button id="logoutBtn" class="icon-btn" style="display:none;" onclick="logout()">خروج</button>
     </div>
     <div class="container" id="mainView"></div>

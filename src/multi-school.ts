@@ -2596,7 +2596,7 @@ export async function handleMultiSchoolRequest(
       scored.push({ id: Number(s.id), name: s.name, points: await getStudentPoints(Number(s.id)) });
     }
     scored.sort((a, b) => b.points - a.points);
-    return jsonOut({ top: scored.slice(0, 15), myRank: scored.findIndex((x) => x.id === stId) + 1, myPoints: await getStudentPoints(stId) });
+    return jsonOut({ top: scored, myRank: scored.findIndex((x) => x.id === stId) + 1, myPoints: await getStudentPoints(stId) });
   }
 
   if (path === "/api/ms/edu/library" && request.method === "GET") {

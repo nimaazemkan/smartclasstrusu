@@ -2230,6 +2230,15 @@ export async function handleMultiSchoolRequest(
         legacyById[Number(ls.user_id)] = ls;
         let m = byName[nm];
         if (!m) {
+          // تطبیق جزئی برای نام‌های کثیف (مثلاً «سلام مهنا...»)
+          for (const k of Object.keys(byName)) {
+            if ((k.length < nm.length && nm.includes(k)) || (nm.length < k.length && k.includes(nm))) {
+              m = byName[k];
+              break;
+            }
+          }
+        }
+        if (!m) {
           // دانش‌آموز جدید بساز (مثلاً مریم خاتمی)
           const studentCode = randCode();
           const parentCode = randCode();
@@ -2333,6 +2342,61 @@ export async function handleMultiSchoolRequest(
         summary.homework++;
       }
       return jsonOut({ ok: true, schoolId, classId, summary });
+    }
+
+    // ==================== 🧹 پاک‌سازی مهاجرت (ردیف‌های تکراری/نام‌های کثیف) ====================
+    if (path === "/api/ms/super/cleanup-import" && request.method === "POST") {
+      const body = (await request.json().catch(() => ({}))) as any;
+      const schoolCode = String(body.schoolCode || "").trim();
+      const school: any = schoolCode ? await db.prepare("SELECT * FROM schools WHERE code = ?").bind(schoolCode).first() : null;
+      if (!school) return jsonOut({ error: "مدرسه یافت نشد." }, 404);
+      const schoolId = Number(school.id);
+      const normName = (x: string) =>
+        String(x || "")
+          .replace(/[\u200c\u200d\u200e\u200f]/g, "")
+          .replace(/ي/g, "ی")
+          .replace(/ك/g, "ک")
+          .replace(/\s+/g, "")
+          .trim();
+      const out: any = { merged: [], deduped: 0 };
+
+      // ۱) ادغام ردیف‌های تکراری دانش‌آموز (نام‌های کثیف مانند «سلام مهنا...»)
+      const students = ((await db.prepare("SELECT * FROM ms_students WHERE school_id = ?").bind(schoolId).all()).results || []) as any[];
+      const byKey: Record<string, any> = {};
+      for (const st of students) byKey[normName(st.name)] = st;
+      for (const st of students) {
+        const key = normName(st.name);
+        let host: any = null;
+        for (const k of Object.keys(byKey)) {
+          if (k !== key && k.length < key.length && key.includes(k)) {
+            host = byKey[k];
+            break;
+          }
+        }
+        if (!host) continue;
+        await db.prepare("UPDATE ms_points SET student_id = ? WHERE student_id = ?").bind(Number(host.id), Number(st.id)).run();
+        await db.prepare("UPDATE ms_submissions SET student_id = ? WHERE student_id = ?").bind(Number(host.id), Number(st.id)).run();
+        await db.prepare("UPDATE ms_missions SET student_id = ? WHERE student_id = ?").bind(Number(host.id), Number(st.id)).run();
+        await db.prepare("UPDATE ms_lab SET student_id = ? WHERE student_id = ?").bind(Number(host.id), Number(st.id)).run();
+        await db.prepare("UPDATE ms_grades SET student_id = ? WHERE student_id = ?").bind(Number(host.id), Number(st.id)).run();
+        await db.prepare("DELETE FROM ms_students WHERE id = ?").bind(Number(st.id)).run();
+        out.merged.push({ from: st.name, to: host.name });
+      }
+
+      // ۲) حذف تکالیف آزاد تکراری (نگه‌داشتن بهترین نسخه هر مورد)
+      const del = await db
+        .prepare(
+          `DELETE FROM ms_submissions
+           WHERE assignment_id = 0 AND id NOT IN (
+             SELECT id FROM (
+               SELECT id, ROW_NUMBER() OVER (PARTITION BY student_id, created_at, COALESCE(text,'') ORDER BY LENGTH(COALESCE(photo_b64,'')) DESC, id DESC) rn
+               FROM ms_submissions WHERE assignment_id = 0
+             ) WHERE rn = 1
+           )`
+        )
+        .run();
+      out.deduped = Number(del.meta?.changes || 0);
+      return jsonOut({ ok: true, ...out });
     }
 
     if (path === "/api/ms/super/announce" && request.method === "POST") {

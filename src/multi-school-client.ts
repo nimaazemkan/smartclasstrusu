@@ -100,8 +100,55 @@ const SCHOOL_JS = String.raw`
     }
 
     // ==================== صفحه ورود و پیدا کردن مدرسه ====================
+    var loginSchools = null;
+    var loginPending = null;
+    var showRegister = false;
+
+    function pickLoginSchool(code) {
+      if (!loginPending) return;
+      loginPending.schoolCode = code;
+      loginSchools = null;
+      submitLogin(loginPending);
+    }
+
+    function cancelLoginSchools() {
+      loginSchools = null;
+      loginPending = null;
+      renderApp();
+    }
+
+    async function submitRegister() {
+      try {
+        var body = {
+          schoolCode: ((document.getElementById("rgSchool") || {}).value || "").trim(),
+          joinCode: ((document.getElementById("rgJoin") || {}).value || "").trim(),
+          name: ((document.getElementById("rgName") || {}).value || "").trim(),
+          nationalId: ((document.getElementById("rgNat") || {}).value || "").trim(),
+          birthday: (document.getElementById("rgBday") || {}).value || "",
+          pin: ((document.getElementById("rgPin") || {}).value || "").trim(),
+        };
+        if (!body.schoolCode || !body.joinCode || !body.name || !body.nationalId) return showToast("کد مدرسه، کد کلاس، نام و کد ملی لازم است");
+        var r = await api("/api/ms/register/student", body);
+        showRegister = false;
+        renderApp();
+        alert("✅ ثبت‌نام انجام شد!\n\nکد دانش‌آموزی: " + r.studentCode + "\nکد والدین: " + r.parentCode + "\nرمز: " + r.pin + "\n\nاین‌ها را نگه دارید و با کد ملی یا کد دانش‌آموزی وارد شوید.");
+      } catch (e) { showToast("❌ " + e.message); }
+    }
+
     function renderLogin(main) {
       main = main || document.getElementById("mainView");
+      if (loginSchools && loginSchools.length) {
+        main.innerHTML =
+          '<div class="auth-wrap"><div class="auth-card">' +
+            '<div class="auth-hero"><div style="font-size:38px;">🏫</div><h1>انتخاب مدرسه</h1>' +
+            '<p>شما در چند مدرسه ثبت شده‌اید؛ مدرسه موردنظر را انتخاب کنید</p></div>' +
+            loginSchools.map(function (s) {
+              return '<button class="btn" style="width:100%;margin:6px 0;background:var(--surface-2);color:var(--text);border:1px solid var(--border);justify-content:flex-start;" onclick="pickLoginSchool(\'' + s.code + '\')">🏫 ' + esc(s.name) + (s.city ? ' — ' + esc(s.city) : '') + '</button>';
+            }).join("") +
+            '<button class="btn btn-ghost" style="width:100%;margin-top:10px;" onclick="cancelLoginSchools()">🔙 انصراف</button>' +
+          '</div></div>';
+        return;
+      }
       var roleTabs = [
         { id: "student", label: "🎓 دانش‌آموز" },
         { id: "parent", label: "👪 والدین" },
@@ -150,21 +197,37 @@ const SCHOOL_JS = String.raw`
             '<input id="msSchoolCode" class="input" inputmode="numeric" placeholder="کد مدرسه (اختیاری)" style="margin-top:8px;" />' +
           '</details>' +
           '<button class="btn btn-primary" style="width:100%;margin-top:8px;" onclick="submitLogin()">ورود</button>' +
+          '<button class="btn btn-ghost" style="width:100%;margin-top:8px;" onclick="showRegister=!showRegister;renderApp()">✍️ ثبت‌نام دانش‌آموز جدید</button>' +
           '<div class="muted" style="text-align:center;font-size:11.5px;margin-top:12px;">' +
-            '🔑 رمز خود را بعد از ورود از بخش «تغییر رمز» عوض کنید' +
+            '🔑 رمز خود را بعد از ورود از بخش «پروفایل» عوض کنید' +
           '</div>' +
-        '</div></div>';
+        '</div></div>' +
+        (showRegister
+          ? '<div class="auth-card" style="margin-top:14px;">' +
+              '<div class="auth-hero" style="padding:16px 12px;"><div style="font-size:32px;">✍️</div><h1 style="font-size:17px;">ثبت‌نام دانش‌آموز</h1>' +
+              '<p>کد مدرسه و کد کلاس را از معلم بگیرید</p></div>' +
+              '<label>کد مدرسه</label><input id="rgSchool" class="input" inputmode="numeric" placeholder="مثلاً 4915" />' +
+              '<label>کد کلاس</label><input id="rgJoin" class="input" inputmode="numeric" placeholder="کد ۶ رقمی کلاس" />' +
+              '<label>نام و نام خانوادگی</label><input id="rgName" class="input" placeholder="نام کامل" />' +
+              '<label>کد ملی (نام کاربری شما)</label><input id="rgNat" class="input" inputmode="numeric" placeholder="کد ملی ۱۰ رقمی" />' +
+              '<label>تاریخ تولد (اختیاری)</label><input id="rgBday" class="input" type="date" dir="ltr" />' +
+              '<label>رمز عبور</label><input id="rgPin" class="input" inputmode="numeric" placeholder="پیش‌فرض 1234" />' +
+              '<button class="btn btn-emerald" style="width:100%;margin-top:12px;" onclick="submitRegister()">ثبت‌نام</button>' +
+            '</div>'
+          : "");
     }
 
-    async function submitLogin() {
+    async function submitLogin(presetBody) {
       try {
-        var body = { role: loginRole };
+        var body = presetBody || { role: loginRole };
         var scEl = document.getElementById("msSchoolCode");
         if (scEl && scEl.value.trim()) body.schoolCode = normDigits(scEl.value.trim());
-        if (loginRole === "student") {
+        if (presetBody) {
+          body = presetBody;
+        } else if (loginRole === "student") {
           body.code = normDigits((document.getElementById("msCode") || {}).value || "");
           body.pin = normDigits((document.getElementById("msPin") || {}).value || "");
-          if (!body.code) return showToast("کد دانش‌آموزی را وارد کنید");
+          if (!body.code) return showToast("کد دانش‌آموزی یا کد ملی را وارد کنید");
         } else if (loginRole === "parent") {
           body.code = normDigits((document.getElementById("msCode") || {}).value || "");
           body.pin = (document.getElementById("msPin") || {}).value || "";
@@ -178,6 +241,12 @@ const SCHOOL_JS = String.raw`
           if (!body.password) return showToast("رمز مدیر ارشد را وارد کنید");
         }
         var r = await api("/api/ms/login", body);
+        if (r && r.needsSchoolChoice) {
+          loginSchools = r.schools || [];
+          loginPending = body;
+          renderApp();
+          return;
+        }
         session = r.session;
         localStorage.setItem("ms_session", JSON.stringify(session));
         msData = null;
@@ -196,14 +265,14 @@ const SCHOOL_JS = String.raw`
         { id: "live", icon: "🎥", label: "کلاس آنلاین" },
         { id: "quiz", icon: "🎮", label: "رقابت" },
         { id: "history", icon: "📜", label: "سوابق" },
-        { id: "pass", icon: "🔑", label: "تغییر رمز" }
+        { id: "pass", icon: "👤", label: "پروفایل" }
       ],
       parent: [
         { id: "report", icon: "📊", label: "کارنامه زنده" },
         { id: "att", icon: "📅", label: "حضور و تکالیف" },
         { id: "certs", icon: "🏅", label: "افتخارات" },
         { id: "chat", icon: "💬", label: "ارتباط با معلم" },
-        { id: "pass", icon: "🔑", label: "تغییر رمز" }
+        { id: "pass", icon: "👤", label: "پروفایل" }
       ],
       teacher: [
         { id: "dash", icon: "📊", label: "داشبورد" },
@@ -213,7 +282,7 @@ const SCHOOL_JS = String.raw`
         { id: "ai", icon: "🤖", label: "ابزار هوش" },
         { id: "class", icon: "🏆", label: "کلاس و کدها" },
         { id: "pchat", icon: "💬", label: "پیام اولیا" },
-        { id: "pass", icon: "🔑", label: "تغییر رمز" }
+        { id: "pass", icon: "👤", label: "پروفایل" }
       ],
       admin: [
         { id: "dash", icon: "📊", label: "داشبورد" },
@@ -224,7 +293,7 @@ const SCHOOL_JS = String.raw`
         { id: "class", icon: "🏆", label: "کلاس و کدها" },
         { id: "pchat", icon: "💬", label: "پیام اولیا" },
         { id: "admin", icon: "🏫", label: "مدیریت" },
-        { id: "pass", icon: "🔑", label: "تغییر رمز" }
+        { id: "pass", icon: "👤", label: "پروفایل" }
       ],
       super: [
         { id: "home", icon: "🏠", label: "نمای کلی" },
@@ -246,20 +315,74 @@ const SCHOOL_JS = String.raw`
     }
     applyTheme();
 
-    async function renderPass(main) {
+    async function renderProfile(main) {
       main = main || document.getElementById("mainView");
-      main.innerHTML =
-        '<div class="section-title">🔑 تغییر رمز عبور</div>' +
-        '<div class="card">' +
-          '<label>رمز فعلی</label>' +
-          '<input id="oldPass" class="input" type="password" placeholder="رمز فعلی" />' +
-          '<label>رمز جدید</label>' +
-          '<input id="newPass1" class="input" type="password" placeholder="رمز جدید (حداقل ۴ کاراکتر)" style="margin-top:10px;" />' +
-          '<label>تکرار رمز جدید</label>' +
-          '<input id="newPass2" class="input" type="password" placeholder="تکرار رمز جدید" style="margin-top:10px;" />' +
-          '<button class="btn btn-emerald" style="width:100%;margin-top:14px;" onclick="savePass()">ذخیره رمز جدید</button>' +
-          '<div class="muted" style="font-size:11.5px;margin-top:10px;">برای دانش‌آموزان، رمز فعلی همان PIN فعلی است (پیش‌فرض 1234).</div>' +
-        '</div>' + backBtnHtml();
+      main.innerHTML = '<div class="card" style="text-align:center;">⏳ ...</div>';
+      try {
+        if (!msData) await ensureHome();
+        var me = session.role === "student" ? (msData.student || {}) : (msData.teacher || {});
+        var myUser = session.role === "teacher" ? ((msData.tg && msData.tg.username) || "") : (me.nationalId || me.studentCode || "");
+        var myBday = me.birthday || "";
+        var isStudentRole = session.role === "student";
+        main.innerHTML =
+          '<div class="section-title">👤 پروفایل من</div>' +
+          '<div class="card">' +
+            '<div style="display:flex;align-items:center;gap:12px;">' +
+              '<div style="width:52px;height:52px;border-radius:16px;background:var(--surface-2);display:flex;align-items:center;justify-content:center;font-size:26px;">👤</div>' +
+              '<div><b>' + esc(session.name || "") + '</b>' +
+              '<div class="muted" style="font-size:12px;">' + (session.role === "student" ? "🎓 دانش‌آموز" : session.role === "teacher" ? "👨‍🏫 معلم" : session.role === "parent" ? "👪 والدین" : "🏫 مدیر") + ' • ' + esc(session.schoolName || "") + '</div></div>' +
+            '</div>' +
+            '<div class="muted" style="margin-top:10px;font-size:11.5px;">✏️ <b>نام</b> شما را فقط معلم یا مدیر مدرسه می‌تواند تغییر دهد.</div>' +
+          '</div>' +
+          (session.role === "parent" ? "" :
+          '<div class="card">' +
+            '<div class="section-title">🪪 نام کاربری (کد ملی)</div>' +
+            '<input id="profUser" class="input" placeholder="کد ملی / نام کاربری جدید" value="' + esc(myUser) + '" />' +
+            '<div class="section-title" style="margin-top:12px;">🎂 تاریخ تولد</div>' +
+            '<input id="profBday" class="input" type="date" dir="ltr" value="' + esc(myBday) + '" />' +
+            '<button class="btn btn-emerald" style="width:100%;margin-top:12px;" onclick="saveProfile()">ذخیره تغییرات</button>' +
+          '</div>') +
+          '<div class="card">' +
+            '<div class="section-title">🔑 تغییر رمز عبور</div>' +
+            '<input id="oldPass" class="input" type="password" placeholder="رمز فعلی" />' +
+            '<input id="newPass1" class="input" type="password" placeholder="رمز جدید (حداقل ۴ کاراکتر)" style="margin-top:10px;" />' +
+            '<input id="newPass2" class="input" type="password" placeholder="تکرار رمز جدید" style="margin-top:10px;" />' +
+            '<button class="btn btn-primary" style="width:100%;margin-top:12px;" onclick="savePass()">ذخیره رمز جدید</button>' +
+            '<div class="muted" style="font-size:11.5px;margin-top:10px;">برای دانش‌آموزان، رمز فعلی همان PIN فعلی است (پیش‌فرض 1234).</div>' +
+          '</div>' + backBtnHtml();
+      } catch (e) {
+        main.innerHTML = '<div class="card">❌ ' + esc(e.message) + '</div>';
+      }
+    }
+
+    async function renameStudent(studentId, btn) {
+      var row = btn && btn.closest ? btn.closest("tr") : null;
+      var cur = row ? (row.querySelector("td") || {}).textContent || "" : "";
+      cur = cur.replace("✏️", "").trim();
+      var nn = prompt("نام جدید دانش‌آموز:", cur);
+      if (nn === null) return;
+      nn = (nn || "").trim();
+      if (nn.length < 2) return showToast("نام جدید کوتاه است");
+      try {
+        await api("/api/ms/admin/students/rename", { studentId: studentId, name: nn });
+        showToast("✅ نام تغییر کرد");
+        renderApp();
+      } catch (e) { showToast("❌ " + e.message); }
+    }
+
+    async function saveProfile() {
+      try {
+        var u = ((document.getElementById("profUser") || {}).value || "").trim();
+        var b = (document.getElementById("profBday") || {}).value || "";
+        await api("/api/ms/account/profile", { username: u, birthday: b });
+        msData = null;
+        showToast("✅ پروفایل ذخیره شد");
+        renderApp();
+      } catch (e) { showToast("❌ " + e.message); }
+    }
+
+    async function renderPass(main) {
+      return renderProfile(main);
     }
 
     async function savePass() {
@@ -771,6 +894,8 @@ const SCHOOL_JS = String.raw`
             '<div class="card" style="margin-top:10px;">' +
               '<div class="section-title">➕ ثبت‌نام تکی</div>' +
               '<input id="nsName" class="input" placeholder="نام و نام خانوادگی دانش‌آموز" />' +
+              '<input id="nsNat" class="input" inputmode="numeric" placeholder="کد ملی (نام کاربری — اختیاری)" style="margin-top:8px;" />' +
+              '<input id="nsBday" class="input" type="date" dir="ltr" placeholder="تاریخ تولد (اختیاری)" style="margin-top:8px;" />' +
               '<select id="nsClass" class="input">' +
                 adminAll.classes.map(function (c2) {
                   return '<option value="' + c2.id + '">' + esc(c2.label) + '</option>';
@@ -780,12 +905,12 @@ const SCHOOL_JS = String.raw`
             '</div>' +
             '<div class="card" style="margin-top:10px;">' +
               '<div class="section-title">📥 ثبت‌نام گروهی (اکسل/CSV)</div>' +
-              '<p class="muted" style="margin-top:0;">هر سطر: <b>نام دانش‌آموز, نام کلاس</b> (مثلاً: <span dir="ltr">علی رضایی, هشتم-۲</span>)<br/>می‌توانید مستقیم از اکسل کپی و اینجا Paste کنید.</p>' +
+              '<p class="muted" style="margin-top:0;">هر سطر: <b>نام دانش‌آموز, نام کلاس, کد ملی</b> (مثلاً: <span dir="ltr">علی رضایی, هشتم-۲, 0012345678</span>) — کد ملی اختیاری است.<br/>می‌توانید مستقیم از اکسل کپی و اینجا Paste کنید.</p>' +
               '<textarea id="bulkText" class="input" rows="6" placeholder="نام, کلاس"></textarea>' +
               '<button class="btn" onclick="bulkImport()">📥 ثبت گروهی و ساخت کدها</button>' +
               '<div id="bulkResults"></div>' +
             '</div>' +
-            '<div class="card" style="margin-top:10px;"><table class="table"><thead><tr><th>نام</th><th>کلاس</th><th>کد دانش‌آموز</th><th>کد والدین</th><th></th></tr></thead><tbody id="studentsTbody">' +
+            '<div class="card" style="margin-top:10px;"><table class="table"><thead><tr><th>نام</th><th>کلاس</th><th>کد دانش‌آموز</th><th>کد والدین</th><th>🪪 کد ملی</th><th></th></tr></thead><tbody id="studentsTbody">' +
             renderStudentsRows(adminAll.students) +
             '</tbody></table></div>';
         } else if (activeTab === "reports") {
@@ -2266,10 +2391,15 @@ const SCHOOL_JS = String.raw`
         main.innerHTML =
           classSwitcherHtml() +
           '<div class="section-title">🏆 کلاس و کدهای ورود — ' + esc(d.class.label) + '</div>' +
+          '<div class="card" style="border:1px solid rgba(16,185,129,0.45);">' +
+            '<b>🔗 کد ثبت‌نام کلاس</b>' +
+            '<div style="font-size:22px;font-weight:800;letter-spacing:3px;margin:8px 0;" dir="ltr">' + esc((d.class && d.class.joinCode) || "—") + '</div>' +
+            '<div class="muted" style="font-size:11.5px;">این کد را به دانش‌آموزان بدهید تا خودشان از صفحه ورود → «✍️ ثبت‌نام دانش‌آموز جدید» با کد ملی ثبت‌نام کنند.</div>' +
+          '</div>' +
           '<div class="card"><table class="table"><thead><tr><th>نام</th><th>🎒 کد دانش‌آموز</th><th>👪 کد والدین</th><th>🏅</th></tr></thead><tbody>' +
           (d.roster || []).map(function (x) {
             return '<tr>' +
-              '<td>' + esc(x.name) + '</td>' +
+              '<td>' + esc(x.name) + ' <button class="btn btn-ghost btn-sm" style="padding:2px 7px;font-size:11px;" onclick="renameStudent(' + (x.id || 0) + ', this)" title="تغییر نام (فقط معلم/مدیر)">✏️</button></td>' +
               '<td><b dir="ltr">' + esc(codeOf(x, "studentCode", "student_code")) + '</b><div class="muted" style="font-size:10px;">PIN: 1234</div></td>' +
               '<td><b dir="ltr">' + esc(codeOf(x, "parentCode", "parent_code")) + '</b></td>' +
               '<td><button class="btn btn-gold btn-sm" onclick="issueCert(' + x.id + ',\'' + esc(x.name) + '\')">🏅</button></td>' +

@@ -279,6 +279,11 @@ export async function ensureSchoolTables(db: D1Database): Promise<void> {
       "ALTER TABLE ms_teachers ADD COLUMN tg_id TEXT DEFAULT ''",
       "ALTER TABLE ms_students ADD COLUMN parent_tg_id TEXT DEFAULT ''",
       "ALTER TABLE schools ADD COLUMN admin_tg_id TEXT DEFAULT ''",
+      "ALTER TABLE ms_students ADD COLUMN national_id TEXT DEFAULT ''",
+      "ALTER TABLE ms_students ADD COLUMN birthday TEXT DEFAULT ''",
+      "ALTER TABLE ms_teachers ADD COLUMN national_id TEXT DEFAULT ''",
+      "ALTER TABLE ms_teachers ADD COLUMN birthday TEXT DEFAULT ''",
+      "ALTER TABLE ms_classes ADD COLUMN join_code TEXT DEFAULT ''",
     ]) {
       try {
         await db.prepare(alter).run();
@@ -286,6 +291,8 @@ export async function ensureSchoolTables(db: D1Database): Promise<void> {
         /* ستون قبلاً وجود دارد */
       }
     }
+    await db.prepare("CREATE TABLE IF NOT EXISTS ms_migration_log (key TEXT PRIMARY KEY, at TEXT)").run();
+    await db.prepare("CREATE TABLE IF NOT EXISTS ms_events_log (key TEXT PRIMARY KEY, at TEXT)").run();
     await db
       .prepare(`CREATE TABLE IF NOT EXISTS ms_messages (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -356,6 +363,15 @@ async function genUniqueCode(db: D1Database, col: "student_code" | "parent_code"
     if (!row) return c;
   }
   return String(Date.now()).slice(-n);
+}
+
+async function ensureJoinCode(db: D1Database, cls: any): Promise<string> {
+  if (cls && cls.id && !String(cls.join_code || "").trim()) {
+    const code = String(Math.floor(100000 + Math.random() * 900000));
+    await db.prepare("UPDATE ms_classes SET join_code = ? WHERE id = ?").bind(code, Number(cls.id)).run();
+    return code;
+  }
+  return String(cls?.join_code || "");
 }
 
 function classLabel(g: { grade_name?: string; class_name?: string }): string {
@@ -484,6 +500,33 @@ export async function msTgNotifyTeachersMapped(db: D1Database, deps: any, school
           .bind(schoolId, kind, refId, chatId, String(msgId), nowIso())
           .run();
       }
+    }
+  } catch {
+    /* بی‌صدا */
+  }
+}
+
+export async function msBirthdayGreetings(db: D1Database, deps: any, schoolId: number): Promise<void> {
+  try {
+    const today = todayStr();
+    const md = today.slice(5); // MM-DD
+    const rows = ((await db
+      .prepare("SELECT * FROM ms_students WHERE school_id = ? AND birthday IS NOT NULL AND birthday != ''")
+      .bind(schoolId)
+      .all()).results || []) as any[];
+    for (const st of rows) {
+      const b = String(st.birthday || "");
+      if (b.length < 10 || b.slice(5) !== md) continue;
+      const key = "bday:" + today + ":" + Number(st.id);
+      const done = await db.prepare("SELECT key FROM ms_events_log WHERE key = ?").bind(key).first();
+      if (done) continue;
+      await db.prepare("INSERT OR REPLACE INTO ms_events_log (key, at) VALUES (?, ?)").bind(key, nowIso()).run();
+      const msg = `🎉 ${st.name} عزیز، تولدت مبارک! 🎂\nاز طرف معلمت — امیدوارم سالی پر از موفقیت و شادی داشته باشی 💐`;
+      await db
+        .prepare("INSERT INTO ms_messages (school_id, class_id, student_id, from_role, text, created_at) VALUES (?, ?, ?, 'teacher', ?, ?)")
+        .bind(schoolId, Number(st.class_id), Number(st.id), msg, nowIso())
+        .run();
+      await msTgNotifyStudent(db, deps, schoolId, Number(st.id), msg);
     }
   } catch {
     /* بی‌صدا */
@@ -814,6 +857,52 @@ export async function handleMultiSchoolRequest(
   }
 
   // ==================== ورود ۵ نقشه (public) ====================
+  // ==================== ✍️ ثبت‌نام آسان دانش‌آموز (با کد کلاس) ====================
+  if (path === "/api/ms/register/student" && request.method === "POST") {
+    const body = (await request.json().catch(() => ({}))) as any;
+    const schoolCode = String(body.schoolCode || "").trim();
+    const joinCode = deps.normalizeDigits(String(body.joinCode || "")).trim();
+    const name = String(body.name || "").trim();
+    const nationalId = deps.normalizeDigits(String(body.nationalId || "")).trim();
+    const birthday = String(body.birthday || "").trim();
+    const pin = deps.normalizeDigits(String(body.pin || "")).trim() || "1234";
+    if (name.length < 2) return jsonOut({ error: "نام و نام خانوادگی را وارد کنید." }, 400);
+    if (nationalId.length < 6) return jsonOut({ error: "کد ملی را به‌درستی وارد کنید (حداقل ۶ رقم)." }, 400);
+    if (pin.length < 4) return jsonOut({ error: "رمز باید حداقل ۴ رقم باشد." }, 400);
+    const school: any = await db.prepare("SELECT * FROM schools WHERE code = ?").bind(schoolCode).first();
+    if (!school) return jsonOut({ error: "مدرسه با این کد یافت نشد." }, 404);
+    if (Number(school.active) !== 1) return jsonOut({ error: "این مدرسه موقتاً معلق است." }, 403);
+    const cls: any = await db.prepare("SELECT * FROM ms_classes WHERE school_id = ? AND join_code = ?").bind(Number(school.id), joinCode).first();
+    if (!cls) return jsonOut({ error: "کد کلاس نادرست است." }, 404);
+    const dup = await db.prepare("SELECT id FROM ms_students WHERE school_id = ? AND (student_code = ? OR national_id = ?)").bind(Number(school.id), nationalId, nationalId).first();
+    if (dup) return jsonOut({ error: "شما قبلاً با این کد ملی ثبت‌نام کرده‌اید؛ از ورود استفاده کنید." }, 400);
+    const codes = await db.prepare("SELECT student_code, parent_code FROM ms_students WHERE school_id = ?").bind(Number(school.id)).all();
+    const used = new Set(((codes.results || []) as any[]).map((r) => String(r.student_code)));
+    const randCode = () => {
+      let c = "";
+      do {
+        c = String(Math.floor(100000 + Math.random() * 900000));
+      } while (used.has(c));
+      used.add(c);
+      return c;
+    };
+    const studentCode = randCode();
+    const parentCode = randCode();
+    const r = await db
+      .prepare("INSERT INTO ms_students (school_id, class_id, name, student_code, parent_code, student_pin, national_id, birthday, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+      .bind(Number(school.id), Number(cls.id), name, studentCode, parentCode, pin, nationalId, birthday || "", nowIso())
+      .run();
+    return jsonOut({
+      ok: true,
+      id: Number(r.meta?.last_row_id || 0),
+      studentCode,
+      parentCode,
+      pin,
+      schoolName: school.name,
+      classLabel: classLabel(cls),
+    });
+  }
+
   if (path === "/api/ms/login" && request.method === "POST") {
     const body = (await request.json().catch(() => ({}))) as any;
     const role = String(body.role || "");
@@ -840,14 +929,19 @@ export async function handleMultiSchoolRequest(
       } else if (role === "teacher" && uName) {
         rows = ((await db.prepare("SELECT s.* FROM schools s JOIN ms_teachers t ON t.school_id = s.id WHERE t.username = ?").bind(uName).all()).results || []) as any[];
       } else if (role === "student" && uCode) {
-        rows = ((await db.prepare("SELECT s.* FROM schools s JOIN ms_students st ON st.school_id = s.id WHERE st.student_code = ?").bind(uCode).all()).results || []) as any[];
+        rows = ((await db.prepare("SELECT s.* FROM schools s JOIN ms_students st ON st.school_id = s.id WHERE st.student_code = ? OR st.national_id = ?").bind(uCode, uCode).all()).results || []) as any[];
       } else if (role === "parent" && uCode) {
         rows = ((await db.prepare("SELECT s.* FROM schools s JOIN ms_students st ON st.school_id = s.id WHERE st.parent_code = ?").bind(uCode).all()).results || []) as any[];
       } else {
         return jsonOut({ error: "نام کاربری و رمز را وارد کنید." }, 400);
       }
       if (rows.length === 0) return jsonOut({ error: "نام کاربری یا رمز اشتباه است." }, 401);
-      if (rows.length > 1) return jsonOut({ error: "این نام کاربری در چند مدرسه ثبت است؛ لطفاً کد مدرسه را هم وارد کنید." }, 400);
+      if (rows.length > 1) {
+        return jsonOut({
+          needsSchoolChoice: true,
+          schools: rows.map((sc: any) => ({ code: sc.code, name: sc.name, city: sc.city || "" })),
+        });
+      }
       school = rows[0];
     }
     if (Number(school.active) !== 1) return jsonOut({ error: "این مدرسه موقتاً توسط مدیر ارشد معلق شده است." }, 403);
@@ -856,6 +950,7 @@ export async function handleMultiSchoolRequest(
     }
     const schoolId = Number(school.id);
     const schoolName = String(school.name);
+    msBirthdayGreetings(db, deps, schoolId).catch(() => {});
 
     if (role === "admin") {
       const u = String(body.username || "").trim();
@@ -909,8 +1004,8 @@ export async function handleMultiSchoolRequest(
       const c = deps.normalizeDigits(String(body.code || "")).trim();
       const pin = deps.normalizeDigits(String(body.pin || "")).trim();
       const st = await db
-        .prepare("SELECT * FROM ms_students WHERE school_id = ? AND student_code = ?")
-        .bind(schoolId, c)
+        .prepare("SELECT * FROM ms_students WHERE school_id = ? AND (student_code = ? OR national_id = ?)")
+        .bind(schoolId, c, c)
         .first();
       if (!st || String(st.student_pin) !== pin) {
         return jsonOut({ error: "کد دانش‌آموزی یا رمز عبور اشتباه است." }, 401);
@@ -997,6 +1092,10 @@ export async function handleMultiSchoolRequest(
 
   // ==================== اطلاعات خانه (همه نقش‌ها) ====================
   if (path === "/api/ms/home" && request.method === "GET") {
+    try {
+      const scBd: any = await db.prepare("SELECT id FROM schools WHERE id = ?").bind(Number(tok.schoolId || 0)).first();
+      if (scBd) msBirthdayGreetings(db, deps, Number(tok.schoolId)).catch(() => {});
+    } catch (e) { /* بی‌صدا */ }
     if (isSuper) {
       const schools = (await db.prepare("SELECT COUNT(*) c FROM schools").first()) as any;
       const students = (await db.prepare("SELECT COUNT(*) c FROM ms_students").first()) as any;
@@ -1078,7 +1177,7 @@ export async function handleMultiSchoolRequest(
       return jsonOut({
         school: schoolInfo,
         class: { id: Number(st.class_id), label: classLabel(cls || {}), grade: cls?.grade_name || "", name: cls?.class_name || "" },
-        student: { id: stId, name: st.name, studentCode: st.student_code, parentCode: st.parent_code, pin: st.student_pin },
+        student: { id: stId, name: st.name, studentCode: st.student_code, parentCode: st.parent_code, pin: st.student_pin, nationalId: st.national_id || "", birthday: st.birthday || "" },
         subjects,
         attendance: {
           present,
@@ -1120,7 +1219,7 @@ export async function handleMultiSchoolRequest(
           live: getLiveRoomPublicStatus(`s${schoolId}c${cid}`),
         });
       }
-      return jsonOut({ school: schoolInfo, teacher: { id: tId, name: t.name }, classes, tg: { username: String(t.username || ""), linked: Boolean(t.tg_id) } });
+      return jsonOut({ school: schoolInfo, teacher: { id: tId, name: t.name, birthday: t.birthday || "" }, classes, tg: { username: String(t.username || ""), linked: Boolean(t.tg_id) } });
     }
 
     if (isAdmin) {
@@ -1209,6 +1308,73 @@ export async function handleMultiSchoolRequest(
     return jsonOut({ error: "غیرمجاز." }, 403);
   }
 
+  // ==================== 👤 پروفایل: تغییر نام‌کاربری و تاریخ تولد ====================
+  if (path === "/api/ms/account/profile" && request.method === "POST") {
+    const body = (await request.json().catch(() => ({}))) as any;
+    const newUsername = String(body.username || "").trim();
+    const birthday = String(body.birthday || "").trim();
+    if (birthday && (!/^\d{4}-\d{2}-\d{2}$/.test(birthday))) {
+      return jsonOut({ error: "تاریخ تولد نامعتبر است." }, 400);
+    }
+    if (isTeacher) {
+      const t: any = await db.prepare("SELECT * FROM ms_teachers WHERE id = ? AND school_id = ?").bind(Number(tok.teacherId || 0), schoolId).first();
+      if (!t) return jsonOut({ error: "معلم یافت نشد." }, 404);
+      if (newUsername && newUsername !== String(t.username)) {
+        if (newUsername.length < 4) return jsonOut({ error: "نام کاربری باید حداقل ۴ کاراکتر باشد." }, 400);
+        const dup = await db.prepare("SELECT id FROM ms_teachers WHERE school_id = ? AND username = ? AND id != ?").bind(schoolId, newUsername, Number(t.id)).first();
+        if (dup) return jsonOut({ error: "این نام کاربری قبلاً ثبت شده است." }, 400);
+        await db.prepare("UPDATE ms_teachers SET username = ? WHERE id = ?").bind(newUsername, Number(t.id)).run();
+      }
+      if (birthday) await db.prepare("UPDATE ms_teachers SET birthday = ? WHERE id = ?").bind(birthday, Number(t.id)).run();
+      return jsonOut({ ok: true, username: newUsername || String(t.username) });
+    }
+    if (isStudent) {
+      const st: any = await db.prepare("SELECT * FROM ms_students WHERE id = ? AND school_id = ?").bind(Number(tok.studentId || 0), schoolId).first();
+      if (!st) return jsonOut({ error: "دانش‌آموز یافت نشد." }, 404);
+      if (newUsername) {
+        if (newUsername.length < 6) return jsonOut({ error: "نام کاربری (کد ملی) باید حداقل ۶ رقم باشد." }, 400);
+        const dup = await db.prepare("SELECT id FROM ms_students WHERE school_id = ? AND (student_code = ? OR national_id = ?) AND id != ?").bind(schoolId, newUsername, newUsername, Number(st.id)).first();
+        if (dup) return jsonOut({ error: "این نام کاربری قبلاً ثبت شده است." }, 400);
+        await db.prepare("UPDATE ms_students SET national_id = ? WHERE id = ?").bind(newUsername, Number(st.id)).run();
+      }
+      if (birthday) await db.prepare("UPDATE ms_students SET birthday = ? WHERE id = ?").bind(birthday, Number(st.id)).run();
+      return jsonOut({ ok: true, username: newUsername || String(st.national_id || st.student_code) });
+    }
+    if (isAdmin) {
+      if (newUsername && newUsername !== String(schoolRow.admin_user || "")) {
+        if (newUsername.length < 4) return jsonOut({ error: "نام کاربری باید حداقل ۴ کاراکتر باشد." }, 400);
+        await db.prepare("UPDATE schools SET admin_user = ? WHERE id = ?").bind(newUsername, schoolId).run();
+      }
+      return jsonOut({ ok: true, username: newUsername || String(schoolRow.admin_user || "") });
+    }
+    return jsonOut({ error: "غیرمجاز." }, 403);
+  }
+
+    if (path === "/api/ms/admin/students/rename" && request.method === "POST" && (isTeacher || isAdmin)) {
+      const body = (await request.json().catch(() => ({}))) as any;
+      const sid = Number(body.studentId || 0);
+      const newName = String(body.name || "").trim();
+      if (newName.length < 2) return jsonOut({ error: "نام جدید کوتاه است." }, 400);
+      const st: any = await db.prepare("SELECT * FROM ms_students WHERE id = ? AND school_id = ?").bind(sid, schoolId).first();
+      if (!st) return jsonOut({ error: "دانش‌آموز یافت نشد." }, 404);
+      if (isTeacher && !isAdmin) {
+        const tRow: any = await db.prepare("SELECT subjects FROM ms_teachers WHERE id = ? AND school_id = ?").bind(Number(tok.teacherId || 0), schoolId).first();
+        const subsMap = parseSubjects(tRow ? String(tRow.subjects || "{}") : "{}");
+        if (!subsMap[String(st.class_id)]) return jsonOut({ error: "این دانش‌آموز در کلاس شما نیست." }, 403);
+      }
+      await db.prepare("UPDATE ms_students SET name = ? WHERE id = ?").bind(newName, sid).run();
+      return jsonOut({ ok: true });
+    }
+
+    if (path === "/api/ms/admin/teachers/rename" && request.method === "POST" && isAdmin) {
+      const body = (await request.json().catch(() => ({}))) as any;
+      const tid = Number(body.teacherId || 0);
+      const newName = String(body.name || "").trim();
+      if (newName.length < 2) return jsonOut({ error: "نام جدید کوتاه است." }, 400);
+      await db.prepare("UPDATE ms_teachers SET name = ? WHERE id = ? AND school_id = ?").bind(newName, tid, schoolId).run();
+      return jsonOut({ ok: true });
+    }
+
   // ==================== 📤 ارسال آزاد تکلیف دانش‌آموز ====================
   if (path === "/api/ms/student/hw/send" && request.method === "POST" && isStudent) {
     const body = (await request.json().catch(() => ({}))) as any;
@@ -1267,7 +1433,7 @@ export async function handleMultiSchoolRequest(
         .bind(cid, subs[String(cid)])
         .all();
       return jsonOut({
-        class: { id: cid, label: classLabel(cls), subject: subs[String(cid)] },
+        class: { id: cid, label: classLabel(cls), subject: subs[String(cid)], joinCode: await ensureJoinCode(db, cls) },
         roster: (roster.results || []).map((s: any) => ({
           id: Number(s.id),
           name: s.name,
@@ -1514,7 +1680,7 @@ export async function handleMultiSchoolRequest(
       const out: any[] = [];
       for (const c of (rows.results || []) as any[]) {
         const cnt = (await db.prepare("SELECT COUNT(*) c FROM ms_students WHERE class_id = ?").bind(Number(c.id)).first()) as any;
-        out.push({ id: Number(c.id), grade: c.grade_name, name: c.class_name, label: classLabel(c), studentCount: Number(cnt?.c || 0) });
+        out.push({ id: Number(c.id), grade: c.grade_name, name: c.class_name, label: classLabel(c), studentCount: Number(cnt?.c || 0), joinCode: await ensureJoinCode(db, c) });
       }
       return jsonOut({ classes: out });
     }
@@ -1529,11 +1695,12 @@ export async function handleMultiSchoolRequest(
         .bind(schoolId, grade, name)
         .first();
       if (ex) return jsonOut({ error: "این کلاس قبلاً ثبت شده است." }, 400);
+      const joinCode = String(Math.floor(100000 + Math.random() * 900000));
       const r = await db
-        .prepare("INSERT INTO ms_classes (school_id, grade_name, class_name, created_at) VALUES (?, ?, ?, ?)")
-        .bind(schoolId, grade, name, nowIso())
+        .prepare("INSERT INTO ms_classes (school_id, grade_name, class_name, join_code, created_at) VALUES (?, ?, ?, ?, ?)")
+        .bind(schoolId, grade, name, joinCode, nowIso())
         .run();
-      return jsonOut({ ok: true, id: Number(r.meta?.last_row_id || 0) });
+      return jsonOut({ ok: true, id: Number(r.meta?.last_row_id || 0), joinCode });
     }
 
     if (path === "/api/ms/admin/classes/delete" && request.method === "POST") {
@@ -1581,8 +1748,8 @@ export async function handleMultiSchoolRequest(
         .first();
       if (ex) return jsonOut({ error: "این نام کاربری قبلاً ثبت شده است." }, 400);
       const r = await db
-        .prepare("INSERT INTO ms_teachers (school_id, name, username, password, subjects, created_at) VALUES (?, ?, ?, ?, '{}', ?)")
-        .bind(schoolId, name, username, password, nowIso())
+        .prepare("INSERT INTO ms_teachers (school_id, name, username, password, subjects, national_id, created_at) VALUES (?, ?, ?, ?, '{}', ?, ?)")
+        .bind(schoolId, name, username, password, username, nowIso())
         .run();
       return jsonOut({ ok: true, id: Number(r.meta?.last_row_id || 0) });
     }
@@ -1718,6 +1885,10 @@ export async function handleMultiSchoolRequest(
           continue;
         }
         let name = parts[0];
+        let nationalId = "";
+        if (parts.length >= 3 && /^\d{6,}$/.test(deps.normalizeDigits(parts[parts.length - 1]))) {
+          nationalId = deps.normalizeDigits(parts.pop());
+        }
         let cls: any = null;
         if (parts.length >= 3) {
           cls = findClass(parts[1] + "-" + parts[2]) || findClass(parts[2]) || findClass(parts[1]);
@@ -1740,9 +1911,9 @@ export async function handleMultiSchoolRequest(
         const parentCode = await genUniqueCode(db, "parent_code", 6);
         await db
           .prepare(
-            "INSERT INTO ms_students (school_id, class_id, name, student_code, student_pin, parent_code, tg_id, created_at) VALUES (?, ?, ?, ?, ?, ?, '', ?)"
+            "INSERT INTO ms_students (school_id, class_id, name, student_code, student_pin, parent_code, tg_id, national_id, created_at) VALUES (?, ?, ?, ?, ?, ?, '', ?, ?)"
           )
-          .bind(schoolId, Number(cls.id), name, studentCode, "1234", parentCode, nowIso())
+          .bind(schoolId, Number(cls.id), name, studentCode, "1234", parentCode, nationalId, nowIso())
           .run();
         total++;
         results.push({
@@ -2185,7 +2356,7 @@ export async function handleMultiSchoolRequest(
       if (teacherTgId && teacherUsername) {
         await db.prepare("UPDATE ms_teachers SET tg_id = ? WHERE school_id = ? AND username = ?").bind(teacherTgId, schoolId, teacherUsername).run();
       }
-      await db.prepare("CREATE TABLE IF NOT EXISTS ms_migration_log (key TEXT PRIMARY KEY, at TEXT)").run();
+  
 
       const normName = (x: string) =>
         String(x || "")

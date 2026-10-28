@@ -50,6 +50,77 @@ const SCHOOL_JS = String.raw`
       } catch (e) { return iso; }
     }
 
+    // ===== تبدیل تاریخ شمسی/میلادی (الگوریتم jalaali) =====
+    function jDiv(a, b) { return ~~(a / b); }
+    function jMod(a, b) { return a - ~~(a / b) * b; }
+    function jalCal(jy) {
+      var breaks = [-61, 9, 38, 199, 426, 686, 756, 818, 1111, 1181, 1210, 1635, 1701, 1866, 2020, 2449];
+      var bl = breaks.length, gy = jy + 621, leapJ = -14, jp = breaks[0], jm, jump, leap, leapG, march, n, i;
+      if (jy < jp || jy >= breaks[bl - 1]) return null;
+      for (i = 1; i < bl; i += 1) {
+        jm = breaks[i]; jump = jm - jp;
+        if (jy < jm) break;
+        leapJ = leapJ + jDiv(jump, 33) * 8 + jDiv(jMod(jump, 33), 4);
+        jp = jm;
+      }
+      n = jy - jp;
+      leapJ = leapJ + jDiv(n, 33) * 8 + jDiv(jMod(n, 33) + 3, 4);
+      if (jMod(jump, 33) === 4 && jump - n === 4) leapJ += 1;
+      leapG = jDiv(gy, 4) - jDiv((jDiv(gy, 100) + 1) * 3, 4) - 150;
+      march = 20 + leapJ - leapG;
+      if (jump - n < 6) n = n - jump + jDiv(jump + 4, 33) * 33;
+      leap = jMod(jMod(n + 1, 33) - 1, 4);
+      if (leap === -1) leap = 4;
+      return { leap: leap, gy: gy, march: march };
+    }
+    function g2d(gy, gm, gd) {
+      var d = jDiv((gy + jDiv(gm - 8, 6) + 100100) * 1461, 4) + jDiv(153 * jMod(gm + 9, 12) + 2, 5) + gd - 34840408;
+      return d - jDiv(jDiv(gy + 100100 + jDiv(gm - 8, 6), 100) * 3, 4) + 752;
+    }
+    function d2g(jdn) {
+      var j = 4 * jdn + 139361631;
+      j = j + jDiv(jDiv(4 * jdn + 183187720, 146097) * 3, 4) * 4 - 3908;
+      var i = jDiv(jMod(j, 1461), 4) * 5 + 308;
+      var gd = jDiv(jMod(i, 153), 5) + 1;
+      var gm = jMod(jDiv(i, 153), 12) + 1;
+      var gy = jDiv(j, 1461) - 100100 + jDiv(8 - gm, 6);
+      return { gy: gy, gm: gm, gd: gd };
+    }
+    function j2d(jy, jm, jd) {
+      var r = jalCal(jy);
+      if (!r) return null;
+      return g2d(r.gy, 3, r.march) + (jm - 1) * 31 - jDiv(jm, 7) * (jm - 7) + jd - 1;
+    }
+    function d2j(jdn) {
+      var g = d2g(jdn), gy = g.gy, jy = gy - 621, r = jalCal(jy), jdn1f = g2d(gy, 3, r.march), k;
+      k = jdn - jdn1f;
+      if (k >= 0) {
+        if (k <= 185) return { jy: jy, jm: 1 + jDiv(k, 31), jd: jMod(k, 31) + 1 };
+        k -= 186;
+      } else { jy -= 1; k += 179; if (r.leap === 1) k += 1; }
+      return { jy: jy, jm: 7 + jDiv(k, 30), jd: jMod(k, 30) + 1 };
+    }
+    function jPad(n) { return (n < 10 ? "0" : "") + n; }
+    function gregorianToJalali(iso) {
+      if (!iso || String(iso).length < 10) return "";
+      var p = String(iso).slice(0, 10).split("-");
+      if (p.length !== 3) return "";
+      try {
+        var j = d2j(g2d(Number(p[0]), Number(p[1]), Number(p[2])));
+        return j.jy + "/" + jPad(j.jm) + "/" + jPad(j.jd);
+      } catch (e) { return ""; }
+    }
+    function jalaliToGregorian(str) {
+      var p = normDigits(String(str || "")).replace(/[\-\.\s]/g, "/").split("/").filter(Boolean);
+      if (p.length !== 3) return null;
+      var jy = Number(p[0]), jm = Number(p[1]), jd = Number(p[2]);
+      if (!(jy > 1240 && jy < 1500 && jm >= 1 && jm <= 12 && jd >= 1 && jd <= 31)) return null;
+      var d = j2d(jy, jm, jd);
+      if (d === null) return null;
+      var g = d2g(d);
+      return g.gy + "-" + jPad(g.gm) + "-" + jPad(g.gd);
+    }
+
     function normDigits(str) {
       return String(str || "")
         .replace(/[۰-۹]/g, function (d) { return String("۰۱۲۳۴۵۶۷۸۹".indexOf(d)); })
@@ -124,9 +195,14 @@ const SCHOOL_JS = String.raw`
           joinCode: ((document.getElementById("rgJoin") || {}).value || "").trim(),
           name: ((document.getElementById("rgName") || {}).value || "").trim(),
           nationalId: ((document.getElementById("rgNat") || {}).value || "").trim(),
-          birthday: (document.getElementById("rgBday") || {}).value || "",
+          birthday: "",
           pin: ((document.getElementById("rgPin") || {}).value || "").trim(),
         };
+        var rgBd = ((document.getElementById("rgBday") || {}).value || "").trim();
+        if (rgBd) {
+          body.birthday = jalaliToGregorian(rgBd) || "";
+          if (!body.birthday) return showToast("تاریخ تولد شمسی نامعتبر است (مثال: 1404/05/12)");
+        }
         if (!body.schoolCode || !body.joinCode || !body.name || !body.nationalId) return showToast("کد مدرسه، کد کلاس، نام و کد ملی لازم است");
         var r = await api("/api/ms/register/student", body);
         showRegister = false;
@@ -210,7 +286,7 @@ const SCHOOL_JS = String.raw`
               '<label>کد کلاس</label><input id="rgJoin" class="input" inputmode="numeric" placeholder="کد ۶ رقمی کلاس" />' +
               '<label>نام و نام خانوادگی</label><input id="rgName" class="input" placeholder="نام کامل" />' +
               '<label>کد ملی (نام کاربری شما)</label><input id="rgNat" class="input" inputmode="numeric" placeholder="کد ملی ۱۰ رقمی" />' +
-              '<label>تاریخ تولد (اختیاری)</label><input id="rgBday" class="input" type="date" dir="ltr" />' +
+              '<label>تاریخ تولد شمسی (اختیاری)</label><input id="rgBday" class="input" dir="ltr" placeholder="۱۴۰۴/۰۵/۱۲" />' +
               '<label>رمز عبور</label><input id="rgPin" class="input" inputmode="numeric" placeholder="پیش‌فرض 1234" />' +
               '<button class="btn btn-emerald" style="width:100%;margin-top:12px;" onclick="submitRegister()">ثبت‌نام</button>' +
             '</div>'
@@ -339,7 +415,7 @@ const SCHOOL_JS = String.raw`
             '<div class="section-title">🪪 نام کاربری (کد ملی)</div>' +
             '<input id="profUser" class="input" placeholder="کد ملی / نام کاربری جدید" value="' + esc(myUser) + '" />' +
             '<div class="section-title" style="margin-top:12px;">🎂 تاریخ تولد</div>' +
-            '<input id="profBday" class="input" type="date" dir="ltr" value="' + esc(myBday) + '" />' +
+            '<input id="profBday" class="input" dir="ltr" placeholder="۱۴۰۴/۰۵/۱۲ (شمسی)" value="' + esc(gregorianToJalali(myBday)) + '" />' +
             '<button class="btn btn-emerald" style="width:100%;margin-top:12px;" onclick="saveProfile()">ذخیره تغییرات</button>' +
           '</div>') +
           '<div class="card">' +
@@ -373,7 +449,12 @@ const SCHOOL_JS = String.raw`
     async function saveProfile() {
       try {
         var u = ((document.getElementById("profUser") || {}).value || "").trim();
-        var b = (document.getElementById("profBday") || {}).value || "";
+        var bRaw = ((document.getElementById("profBday") || {}).value || "").trim();
+        var b = "";
+        if (bRaw) {
+          b = jalaliToGregorian(bRaw) || "";
+          if (!b) return showToast("تاریخ تولد را درست وارد کنید (مثال: 1404/05/12 به شمسی)");
+        }
         await api("/api/ms/account/profile", { username: u, birthday: b });
         msData = null;
         showToast("✅ پروفایل ذخیره شد");
@@ -489,7 +570,7 @@ const SCHOOL_JS = String.raw`
             '<div class="stat-grid">' +
               '<div class="stat-card" style="border:1px solid rgba(245,158,11,0.45);"><div class="stat-ico">⭐</div><div class="stat-num">' + d.points.total + '</div><div class="stat-label">امتیاز من</div></div>' +
               '<div class="stat-card" style="border:1px solid rgba(249,115,22,0.5);"><div class="stat-ico">🔥</div><div class="stat-num">' + (d.streak || 0) + '</div><div class="stat-label">استریک روزها</div></div>' +
-              '<div class="stat-card"><div class="stat-ico">🏆</div><div class="stat-num">' + (d.rank || "-") + '</div><div class="stat-label">رتبه در کلاس</div></div>' +
+              '<div class="stat-card" style="border:1px solid rgba(234,179,8,0.5);"><div class="stat-ico">🏆</div><div class="stat-num">' + (d.classRank ? d.classRank + ' از ' + (d.classTotal || "?") : "—") + '</div><div class="stat-label">رتبه من در کلاس</div></div>' +
               '<div class="stat-card"><div class="stat-ico">📅</div><div class="stat-num">' + (d.attendance.pct) + '%</div><div class="stat-label">حضور در کلاس‌ها</div></div>' +
             '</div>' +
             '<div class="section-title">📚 درس‌های من</div>' +
@@ -895,7 +976,7 @@ const SCHOOL_JS = String.raw`
               '<div class="section-title">➕ ثبت‌نام تکی</div>' +
               '<input id="nsName" class="input" placeholder="نام و نام خانوادگی دانش‌آموز" />' +
               '<input id="nsNat" class="input" inputmode="numeric" placeholder="کد ملی (نام کاربری — اختیاری)" style="margin-top:8px;" />' +
-              '<input id="nsBday" class="input" type="date" dir="ltr" placeholder="تاریخ تولد (اختیاری)" style="margin-top:8px;" />' +
+              '<input id="nsBday" class="input" dir="ltr" placeholder="تولد شمسی — ۱۴۰۴/۰۵/۱۲ (اختیاری)" style="margin-top:8px;" />' +
               '<select id="nsClass" class="input">' +
                 adminAll.classes.map(function (c2) {
                   return '<option value="' + c2.id + '">' + esc(c2.label) + '</option>';
@@ -1062,7 +1143,18 @@ const SCHOOL_JS = String.raw`
       try {
         var name = document.getElementById("nsName").value.trim();
         var classId = Number(document.getElementById("nsClass").value);
-        var r = await api("/api/ms/admin/students", { name: name, classId: classId });
+        var nsBd = ((document.getElementById("nsBday") || {}).value || "").trim();
+        var nsBdIso = "";
+        if (nsBd) {
+          nsBdIso = jalaliToGregorian(nsBd) || "";
+          if (!nsBdIso) return showToast("تاریخ تولد شمسی نامعتبر است (مثال: 1404/05/12)");
+        }
+        var r = await api("/api/ms/admin/students", {
+          name: name,
+          classId: classId,
+          nationalId: ((document.getElementById("nsNat") || {}).value || "").trim(),
+          birthday: nsBdIso,
+        });
         showToast("✅ ثبت شد — کد دانش‌آموز: " + r.studentCode + " | کد والدین: " + r.parentCode);
         renderApp();
       } catch (e) { showToast("❌ " + e.message); }

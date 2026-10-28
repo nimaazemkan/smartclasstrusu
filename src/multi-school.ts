@@ -1174,8 +1174,24 @@ export async function handleMultiSchoolRequest(
         .all();
 
       const liveKey = `s${schoolId}c${Number(st.class_id)}`;
-      return jsonOut({
+      const classMates = ((await db
+        .prepare("SELECT id FROM ms_students WHERE school_id = ? AND class_id = ?")
+        .bind(schoolId, Number(st.class_id))
+        .all()).results || []) as any[];
+      const ptsMap: Record<number, number> = {};
+      const ptsRows = ((await db
+        .prepare("SELECT student_id, COALESCE(SUM(delta),0) p FROM ms_points WHERE school_id = ? AND class_id = ? GROUP BY student_id")
+        .bind(schoolId, Number(st.class_id))
+        .all()).results || []) as any[];
+      for (const pr of ptsRows) ptsMap[Number(pr.student_id)] = Number(pr.p || 0);
+      const classScored = classMates.map((cm: any) => ({ id: Number(cm.id), points: ptsMap[Number(cm.id)] || 0 }));
+      classScored.sort((a, b) => b.points - a.points);
+      const classRank = classScored.findIndex((x) => x.id === stId) + 1;
+      const classTotal = classScored.length;
+    return jsonOut({
         school: schoolInfo,
+        classRank,
+        classTotal,
         class: { id: Number(st.class_id), label: classLabel(cls || {}), grade: cls?.grade_name || "", name: cls?.class_name || "" },
         student: { id: stId, name: st.name, studentCode: st.student_code, parentCode: st.parent_code, pin: st.student_pin, nationalId: st.national_id || "", birthday: st.birthday || "" },
         subjects,

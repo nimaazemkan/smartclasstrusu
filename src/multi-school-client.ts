@@ -100,149 +100,80 @@ const SCHOOL_JS = String.raw`
     }
 
     // ==================== صفحه ورود و پیدا کردن مدرسه ====================
-    function renderLogin() {
-      var nav = document.getElementById("bottomNav");
-      nav.style.display = "none";
-      var main = document.getElementById("mainView");
-      var schoolBlock = "";
-      if (loginRole !== "super") {
-        if (!selSchool) {
-          schoolBlock =
-            '<div class="card" style="margin-bottom:12px;">' +
-              '<div class="section-title">🔍 مدرسه‌ام را پیدا کن</div>' +
-              '<p class="muted" style="margin-top:0;">کد ۴ رقمی مدرسه‌تان را وارد کنید (از مدیر مدرسه بگیرید) یا نام مدرسه را جستجو کنید:</p>' +
-              '<div style="display:flex;gap:8px;">' +
-                '<input id="fSchoolCode" class="input" type="tel" dir="ltr" placeholder="کد مدرسه (مثلاً 1024)" style="flex:1;" />' +
-                '<button class="btn btn-emerald" style="width:auto;padding:10px 16px;" onclick="findSchool(true)">بررسی</button>' +
-              '</div>' +
-              '<div style="display:flex;gap:8px;margin-top:8px;">' +
-                '<input id="fSchoolQ" class="input" placeholder="یا نام مدرسه را بنویسید..." style="flex:1;" />' +
-                '<button class="btn btn-ghost" style="width:auto;padding:10px 16px;" onclick="findSchool(false)">🔎 جستجو</button>' +
-              '</div>' +
-              (schoolResults.length
-                ? '<div style="margin-top:10px;">' + schoolResults.map(function (s) {
-                    return '<button class="card" style="width:100%;text-align:right;cursor:pointer;margin-bottom:8px;padding:12px;" onclick="pickSchool(\'' + esc(s.code) + '\',\'' + esc(s.name) + '\',\'' + esc(s.city) + '\')">' +
-                      '<div style="font-weight:800;">🏫 ' + esc(s.name) + (s.usable ? '' : ' <span class="badge-pill" style="background:rgba(244,63,94,0.2);color:#FDA4AF;">غیرفعال</span>') + '</div>' +
-                      '<div class="muted" style="font-size:12px;">' + esc(s.city || "") + ' • کد: ' + esc(s.code) + '</div>' +
-                    '</button>';
-                  }).join("") + '</div>'
-                : "")
-            + '</div>';
-        } else {
-          schoolBlock =
-            '<div class="card" style="margin-bottom:12px;border-color:rgba(16,185,129,0.5);">' +
-              '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">' +
-                '<div>' +
-                  '<div style="font-weight:800;color:#6EE7B7;">🏫 ' + esc(selSchool.name) + '</div>' +
-                  '<div class="muted" style="font-size:12px;">' + esc(selSchool.city || "") + ' • کد مدرسه: ' + esc(selSchool.code) + '</div>' +
-                '</div>' +
-                '<button class="btn btn-ghost btn-sm" onclick="clearSchool()">تغییر مدرسه</button>' +
-              '</div>' +
-            '</div>';
-        }
-      }
-
-      var credBlock = "";
+    function renderLogin(main) {
+      var roleTabs = [
+        { id: "student", label: "🎓 دانش‌آموز" },
+        { id: "parent", label: "👪 والدین" },
+        { id: "teacher", label: "👨‍🏫 معلم" },
+        { id: "admin", label: "🏫 مدیر مدرسه" },
+        { id: "super", label: "⭐ مدیر ارشد" }
+      ];
+      var credHtml = "";
       if (loginRole === "student") {
-        credBlock =
-          '<input id="msCode" class="input" type="tel" dir="ltr" placeholder="کد دانش‌آموزی ۶ رقمی" />' +
-          '<input id="msPin" class="input" type="password" dir="ltr" placeholder="رمز عبور (پیش‌فرض: 1234)" />' +
-          '<button class="btn" onclick="submitLogin()">🚀 ورود به میز کار دانش‌آموز</button>';
+        credHtml =
+          '<label>کد دانش‌آموزی</label>' +
+          '<input id="msCode" class="input" inputmode="numeric" placeholder="کد ۶ رقمی" />' +
+          '<label>رمز عبور</label>' +
+          '<input id="msPin" class="input" type="password" placeholder="رمز (پیش‌فرض 1234)" />';
       } else if (loginRole === "parent") {
-        credBlock =
-          '<input id="msCode" class="input" type="tel" dir="ltr" placeholder="کد اختصاصی والدین" />' +
-          '<button class="btn btn-gold" onclick="submitLogin()">👪 ورود به پنل اولیا</button>';
-      } else if (loginRole === "teacher") {
-        credBlock =
-          '<input id="msUser" class="input" dir="ltr" placeholder="نام کاربری معلم" />' +
-          '<input id="msPass" class="input" type="password" dir="ltr" placeholder="رمز معلم" />' +
-          '<button class="btn" onclick="submitLogin()">👨‍🏫 ورود به پنل معلم</button>';
-      } else if (loginRole === "admin") {
-        credBlock =
-          '<input id="msUser" class="input" dir="ltr" placeholder="نام کاربری مدیر مدرسه" />' +
-          '<input id="msPass" class="input" type="password" dir="ltr" placeholder="رمز مدیر مدرسه" />' +
-          '<button class="btn btn-emerald" onclick="submitLogin()">🏫 ورود به پنل مدیر مدرسه</button>';
-      } else if (loginRole === "super") {
-        credBlock =
-          '<input id="msPass" class="input" type="password" dir="ltr" placeholder="رمز مدیر ارشد سامانه" />' +
-          '<button class="btn btn-gold" onclick="submitLogin()">👑 ورود به پنل مدیر ارشد</button>';
+        credHtml =
+          '<label>کد والدین</label>' +
+          '<input id="msCode" class="input" inputmode="numeric" placeholder="کد ۶ رقمی والدین" />' +
+          '<label>رمز عبور (در صورت تنظیم)</label>' +
+          '<input id="msPin" class="input" type="password" placeholder="اختیاری" />';
+      } else if (loginRole === "teacher" || loginRole === "admin") {
+        credHtml =
+          '<label>نام کاربری</label>' +
+          '<input id="msUser" class="input" autocomplete="username" placeholder="مثلاً nimaazemkan" />' +
+          '<label>رمز عبور</label>' +
+          '<input id="msPass" class="input" type="password" autocomplete="current-password" placeholder="رمز عبور" />';
+      } else {
+        credHtml =
+          '<label>رمز مدیر ارشد</label>' +
+          '<input id="msPass" class="input" type="password" placeholder="رمز مدیر ارشد سامانه" />';
       }
-
       main.innerHTML =
-        '<div class="hero">' +
-          '<div class="hero-icon">🏫</div>' +
-          '<h1>شبکه مدارس هوشمند</h1>' +
-          '<p>سامانه یکپارچه آموزشی برای تمام مدارس ایران<br/>کلاس آنلاین، تکالیف، حضوروغیاب و کارنامه — ۱۰۰٪ رایگان</p>' +
-        '</div>' +
-        '<div class="card">' +
-          '<div class="role-tabs">' +
-            '<button class="role-tab ' + (loginRole === "student" ? "active" : "") + '" onclick="setLoginRole(\'student\')">🎒 دانش‌آموز</button>' +
-            '<button class="role-tab ' + (loginRole === "parent" ? "active" : "") + '" onclick="setLoginRole(\'parent\')">👪 والدین</button>' +
-            '<button class="role-tab ' + (loginRole === "teacher" ? "active" : "") + '" onclick="setLoginRole(\'teacher\')">👨‍🏫 معلم</button>' +
-            '<button class="role-tab ' + (loginRole === "admin" ? "active" : "") + '" onclick="setLoginRole(\'admin\')">🏫 مدیر مدرسه</button>' +
-            '<button class="role-tab ' + (loginRole === "super" ? "active" : "") + '" onclick="setLoginRole(\'super\')">👑 مدیر ارشد</button>' +
+        '<div class="auth-wrap"><div class="auth-card">' +
+          '<div class="auth-hero">' +
+            '<div style="font-size:38px;">🏫</div>' +
+            '<h1>شبکه مدارس هوشمند</h1>' +
+            '<p>سامانه آموزشی چندمدرسه‌ای — ورود سریع فقط با نام کاربری و رمز</p>' +
           '</div>' +
-          schoolBlock +
-          credBlock +
-          '<div style="text-align:center;margin-top:14px;">' +
-            '<a href="/app" class="btn btn-ghost btn-sm" style="text-decoration:none;">🎓 کلاس هوشمند استاد آزمکان (نسخه کلاس خصوصی)</a>' +
+          '<div class="auth-tabs">' +
+            roleTabs.map(function (t) {
+              return '<button class="auth-tab ' + (loginRole === t.id ? "active" : "") + '" onclick="loginRole=\'' + t.id + '\';renderApp()">' + t.label + '</button>';
+            }).join("") +
           '</div>' +
-        '</div>';
-    }
-
-    function setLoginRole(r) {
-      loginRole = r;
-      selSchool = null;
-      schoolResults = [];
-      renderLogin();
-    }
-
-    async function findSchool(byCode) {
-      try {
-        var code = byCode ? normDigits(document.getElementById("fSchoolCode").value) : "";
-        var q = byCode ? "" : (document.getElementById("fSchoolQ").value || "").trim();
-        if (byCode && !code) return showToast("کد مدرسه را وارد کنید");
-        if (!byCode && q.length < 2) return showToast("حداقل ۲ حرف از نام مدرسه را بنویسید");
-        var d = await api("/api/ms/schools/find?code=" + encodeURIComponent(code) + "&q=" + encodeURIComponent(q));
-        schoolResults = d.schools || [];
-        if (schoolResults.length === 0) {
-          showToast("مدرسه‌ای پیدا نشد؛ کد را بررسی کنید یا با مدیر مدرسه تماس بگیرید.");
-        }
-        renderLogin();
-      } catch (e) { showToast("❌ " + e.message); }
-    }
-
-    function pickSchool(code, name, city) {
-      selSchool = { code: code, name: name, city: city };
-      schoolResults = [];
-      renderLogin();
-    }
-
-    function clearSchool() {
-      selSchool = null;
-      renderLogin();
+          credHtml +
+          '<details style="margin:10px 0;"><summary style="cursor:pointer;font-size:12px;color:var(--text-3);">کد مدرسه (فقط اگر سامانه خواست — مثلاً 4915)</summary>' +
+            '<input id="msSchoolCode" class="input" inputmode="numeric" placeholder="کد مدرسه (اختیاری)" style="margin-top:8px;" />' +
+          '</details>' +
+          '<button class="btn btn-primary" style="width:100%;margin-top:8px;" onclick="submitLogin()">ورود</button>' +
+          '<div class="muted" style="text-align:center;font-size:11.5px;margin-top:12px;">' +
+            '🔑 رمز خود را بعد از ورود از بخش «تغییر رمز» عوض کنید' +
+          '</div>' +
+        '</div></div>';
     }
 
     async function submitLogin() {
       try {
         var body = { role: loginRole };
-        if (loginRole !== "super") {
-          if (!selSchool) return showToast("ابتدا مدرسه خود را پیدا کنید.");
-          body.schoolCode = selSchool.code;
-        }
+        var scEl = document.getElementById("msSchoolCode");
+        if (scEl && scEl.value.trim()) body.schoolCode = normDigits(scEl.value.trim());
         if (loginRole === "student") {
-          body.code = normDigits(document.getElementById("msCode").value);
-          body.pin = normDigits(document.getElementById("msPin").value);
+          body.code = normDigits((document.getElementById("msCode") || {}).value || "");
+          body.pin = normDigits((document.getElementById("msPin") || {}).value || "");
           if (!body.code) return showToast("کد دانش‌آموزی را وارد کنید");
         } else if (loginRole === "parent") {
-          body.code = normDigits(document.getElementById("msCode").value);
+          body.code = normDigits((document.getElementById("msCode") || {}).value || "");
+          body.pin = (document.getElementById("msPin") || {}).value || "";
           if (!body.code) return showToast("کد والدین را وارد کنید");
         } else if (loginRole === "teacher" || loginRole === "admin") {
-          body.username = (document.getElementById("msUser").value || "").trim();
-          body.password = document.getElementById("msPass").value;
+          body.username = ((document.getElementById("msUser") || {}).value || "").trim();
+          body.password = (document.getElementById("msPass") || {}).value || "";
           if (!body.username || !body.password) return showToast("نام کاربری و رمز را وارد کنید");
         } else if (loginRole === "super") {
-          body.password = document.getElementById("msPass").value;
+          body.password = (document.getElementById("msPass") || {}).value || "";
           if (!body.password) return showToast("رمز مدیر ارشد را وارد کنید");
         }
         var r = await api("/api/ms/login", body);
@@ -263,13 +194,15 @@ const SCHOOL_JS = String.raw`
         { id: "lab", icon: "🧠", label: "کارگاه" },
         { id: "live", icon: "🎥", label: "کلاس آنلاین" },
         { id: "quiz", icon: "🎮", label: "رقابت" },
-        { id: "history", icon: "📜", label: "سوابق" }
+        { id: "history", icon: "📜", label: "سوابق" },
+        { id: "pass", icon: "🔑", label: "تغییر رمز" }
       ],
       parent: [
         { id: "report", icon: "📊", label: "کارنامه زنده" },
         { id: "att", icon: "📅", label: "حضور و تکالیف" },
         { id: "certs", icon: "🏅", label: "افتخارات" },
-        { id: "chat", icon: "💬", label: "ارتباط با معلم" }
+        { id: "chat", icon: "💬", label: "ارتباط با معلم" },
+        { id: "pass", icon: "🔑", label: "تغییر رمز" }
       ],
       teacher: [
         { id: "dash", icon: "📊", label: "داشبورد" },
@@ -278,7 +211,8 @@ const SCHOOL_JS = String.raw`
         { id: "att", icon: "✅", label: "حضوروغیاب" },
         { id: "ai", icon: "🤖", label: "ابزار هوش" },
         { id: "class", icon: "🏆", label: "کلاس و کدها" },
-        { id: "pchat", icon: "💬", label: "پیام اولیا" }
+        { id: "pchat", icon: "💬", label: "پیام اولیا" },
+        { id: "pass", icon: "🔑", label: "تغییر رمز" }
       ],
       admin: [
         { id: "dash", icon: "📊", label: "داشبورد" },
@@ -288,14 +222,8 @@ const SCHOOL_JS = String.raw`
         { id: "ai", icon: "🤖", label: "ابزار هوش" },
         { id: "class", icon: "🏆", label: "کلاس و کدها" },
         { id: "pchat", icon: "💬", label: "پیام اولیا" },
-        { id: "admin", icon: "🏫", label: "مدیریت" }
-      ],
-      admin: [
-        { id: "home", icon: "🏠", label: "داشبورد" },
-        { id: "students", icon: "🎒", label: "دانش‌آموزان" },
-        { id: "teachers", icon: "👨‍🏫", label: "معلمان" },
-        { id: "classes", icon: "🏗", label: "کلاس‌ها" },
-        { id: "reports", icon: "📊", label: "گزارش‌ها" }
+        { id: "admin", icon: "🏫", label: "مدیریت" },
+        { id: "pass", icon: "🔑", label: "تغییر رمز" }
       ],
       super: [
         { id: "home", icon: "🏠", label: "نمای کلی" },
@@ -303,6 +231,35 @@ const SCHOOL_JS = String.raw`
         { id: "announce", icon: "📢", label: "اطلاعیه سراسری" }
       ]
     };
+
+    async function renderPass(main) {
+      main.innerHTML =
+        '<div class="section-title">🔑 تغییر رمز عبور</div>' +
+        '<div class="card">' +
+          '<label>رمز فعلی</label>' +
+          '<input id="oldPass" class="input" type="password" placeholder="رمز فعلی" />' +
+          '<label>رمز جدید</label>' +
+          '<input id="newPass1" class="input" type="password" placeholder="رمز جدید (حداقل ۴ کاراکتر)" style="margin-top:10px;" />' +
+          '<label>تکرار رمز جدید</label>' +
+          '<input id="newPass2" class="input" type="password" placeholder="تکرار رمز جدید" style="margin-top:10px;" />' +
+          '<button class="btn btn-emerald" style="width:100%;margin-top:14px;" onclick="savePass()">ذخیره رمز جدید</button>' +
+          '<div class="muted" style="font-size:11.5px;margin-top:10px;">برای دانش‌آموزان، رمز فعلی همان PIN فعلی است (پیش‌فرض 1234).</div>' +
+        '</div>' + backBtnHtml();
+    }
+
+    async function savePass() {
+      try {
+        var o = (document.getElementById("oldPass") || {}).value || "";
+        var n1 = (document.getElementById("newPass1") || {}).value || "";
+        var n2 = (document.getElementById("newPass2") || {}).value || "";
+        if (!o || !n1) return showToast("رمز فعلی و جدید را وارد کنید");
+        if (n1.length < 4) return showToast("رمز جدید باید حداقل ۴ کاراکتر باشد");
+        if (n1 !== n2) return showToast("تکرار رمز جدید مطابقت ندارد");
+        await api("/api/ms/account/password", { oldPassword: o, newPassword: n1 });
+        showToast("✅ رمز عبور با موفقیت تغییر کرد");
+        back();
+      } catch (e) { showToast("❌ " + e.message); }
+    }
 
     function renderApp() {
       if (!session || !session.role) return renderLogin();
@@ -371,6 +328,7 @@ const SCHOOL_JS = String.raw`
     async function renderStudent(main) {
       main.innerHTML = '<div class="card" style="text-align:center;">⏳ در حال دریافت اطلاعات...</div>';
       try {
+        if (activeTab === "pass") { await renderPass(main); return; }
         var d = await ensureHome();
         if (activeTab === "home") {
           var liveBanner = session.role === "student" ? renderLiveBannerHtml(d.live) : "";
@@ -391,10 +349,10 @@ const SCHOOL_JS = String.raw`
               '<p>🏫 ' + esc(d.school.name) + ' • کلاس ' + esc(d.class.label) + '</p>' +
             '</div>' +
             '<div class="stat-grid">' +
+              '<div class="stat-card" style="border:1px solid rgba(245,158,11,0.45);"><div class="stat-ico">⭐</div><div class="stat-num">' + d.points.total + '</div><div class="stat-label">امتیاز من</div></div>' +
+              '<div class="stat-card" style="border:1px solid rgba(249,115,22,0.5);"><div class="stat-ico">🔥</div><div class="stat-num">' + (d.streak || 0) + '</div><div class="stat-label">استریک روزها</div></div>' +
+              '<div class="stat-card"><div class="stat-ico">🏆</div><div class="stat-num">' + (d.rank || "-") + '</div><div class="stat-label">رتبه در کلاس</div></div>' +
               '<div class="stat-card"><div class="stat-ico">📅</div><div class="stat-num">' + (d.attendance.pct) + '%</div><div class="stat-label">حضور در کلاس‌ها</div></div>' +
-              '<div class="stat-card"><div class="stat-ico">🏅</div><div class="stat-num">' + d.points.total + '</div><div class="stat-label">امتیاز رفتاری</div></div>' +
-              '<div class="stat-card"><div class="stat-ico">✅</div><div class="stat-num">' + d.attendance.present + '</div><div class="stat-label">حاضر</div></div>' +
-              '<div class="stat-card"><div class="stat-ico">❌</div><div class="stat-num">' + d.attendance.absent + '</div><div class="stat-label">غایب</div></div>' +
             '</div>' +
             '<div class="section-title">📚 درس‌های من</div>' +
             '<div class="stat-grid">' + subjHtml + '</div>' +
@@ -429,6 +387,7 @@ const SCHOOL_JS = String.raw`
               ? '<div class="card" style="margin-top:12px;">' +
                   '<div class="section-title">🔑 کدهای اختصاصی من</div>' +
                   '<div class="muted">کد دانش‌آموزی: <b dir="ltr">' + esc(d.student.studentCode) + '</b> • رمز: <b dir="ltr">' + esc(d.student.pin) + '</b><br/>کد والدین: <b dir="ltr">' + esc(d.student.parentCode) + '</b></div>' +
+                '<div class="muted" style="margin-top:8px;font-size:11.5px;">📲 <b>اتصال تلگرام:</b> در ربات مدرسه، دستور <b dir="ltr">/start</b> را بفرستید و بعد کد <b dir="ltr">' + esc(d.student.studentCode) + '</b> (دانش‌آموز) یا <b dir="ltr">' + esc(d.student.parentCode) + '</b> (والدین) را ارسال کنید تا اعلان‌ها و نتایج به تلگرام شما بیاید.</div>' +
                 '</div>'
               : "");
         } else if (activeTab === "report") {
@@ -562,6 +521,7 @@ const SCHOOL_JS = String.raw`
     async function renderTeacher(main) {
       main.innerHTML = '<div class="card" style="text-align:center;">⏳ در حال دریافت اطلاعات...</div>';
       try {
+        if (activeTab === "pass") { await renderPass(main); return; }
         if (!msData) await ensureHome();
         if (!msData.classes || !msData.classes.length) {
           main.innerHTML = classSwitcherHtml();
@@ -697,6 +657,7 @@ const SCHOOL_JS = String.raw`
     async function renderAdmin(main) {
       main.innerHTML = '<div class="card" style="text-align:center;">⏳ در حال دریافت اطلاعات...</div>';
       try {
+        if (activeTab === "pass") { await renderPass(main); return; }
         if (activeTab === "home") {
           var d = await api("/api/ms/home");
           msData = d;
@@ -1250,54 +1211,115 @@ const SCHOOL_JS = String.raw`
       try {
         var d = await api("/api/ms/student/assignments");
         var list = d.assignments || [];
-        if (!list.length) {
-          main.innerHTML = '<div class="card" style="text-align:center;">📭 هنوز تکلیفی برای کلاس شما ثبت نشده است.</div>' + backBtnHtml();
-          return;
-        }
-        main.innerHTML =
-          '<div class="section-title">📚 تکالیف کلاس' + (d.studentName ? ' — ' + esc(d.studentName) : '') + '</div>' +
-          list.map(function (a) {
-            var sub = a.mySubmission;
-            var statusHtml = "";
-            if (sub) {
-              if (sub.reviewed) {
-                statusHtml = '<div style="margin:8px 0;padding:9px 11px;border-radius:11px;background:rgba(16,185,129,0.13);border:1px solid rgba(16,185,129,0.4);">' +
-                  '✅ تصحیح شد — نمره: <b>' + sub.score + '</b>' +
-                  (sub.feedback ? '<div style="margin-top:4px;font-size:12.5px;">💬 ' + esc(sub.feedback) + '</div>' : '') +
-                '</div>';
-              } else {
-                statusHtml = '<div style="margin:8px 0;padding:9px 11px;border-radius:11px;background:rgba(245,158,11,0.12);border:1px solid rgba(245,158,11,0.4);">⏳ ارسال شد — منتظر تصحیح معلم' + (sub.late ? ' (با تأخیر)' : '') + '</div>';
-              }
-            }
-            var formHtml = "";
-            if (session.role === "student" && (!sub || !sub.reviewed)) {
-              formHtml =
-                '<textarea id="hwText_' + a.id + '" class="input" rows="3" placeholder="متن تکلیف یا جواب سوالات...">' + esc(sub ? sub.text : "") + '</textarea>' +
-                '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">' +
-                  '<label class="btn btn-ghost btn-sm" style="cursor:pointer;">📷 انتخاب عکس<input type="file" accept="image/*" style="display:none;" onchange="pickHwPhoto(' + a.id + ', this)" /></label>' +
-                  '<img id="hwPrev_' + a.id + '" src="" style="display:' + (sub && sub.photo ? "inline-block" : "none") + ';width:64px;height:64px;object-fit:cover;border-radius:9px;border:1px solid var(--border);cursor:pointer;" onclick="viewPhoto(this.src)" />' +
-                  '<button class="btn btn-emerald btn-sm" style="margin-right:auto;" onclick="submitHw(' + a.id + ')">📤 ' + (sub ? "ویرایش ارسال" : "ارسال تکلیف") + '</button>' +
-                '</div>';
-              if (sub && sub.photo) {
-                formHtml = formHtml.replace('src=""', 'src="' + sub.photo + '"');
-              }
-            } else if (sub && sub.photo) {
-              formHtml = '<img src="' + sub.photo + '" style="width:100%;max-height:220px;object-fit:contain;border-radius:11px;cursor:pointer;" onclick="viewPhoto(this.src)" />';
-            }
-            return '<div class="card">' +
-              '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">' +
-                '<b>📌 ' + esc(a.title) + '</b>' +
-                '<span class="badge-pill" style="background:rgba(99,102,241,0.18);color:#C7D2FE;">' + esc(a.subject || "درس") + '</span>' +
+        var free = d.freeSubs || [];
+        var freeForm = session.role === "student"
+          ? '<div class="card" style="border:1px solid rgba(16,185,129,0.45);">' +
+              '<div class="section-title">📤 ارسال تکالیف آزاد</div>' +
+              '<div class="muted" style="font-size:12px;">هر تکلیفی که انجام دادی (عکس یا متن) همین‌جا برای معلم بفرست — حتی اگر تکلیف خاصی ثبت نشده باشد.</div>' +
+              '<textarea id="hwFreeText" class="input" rows="3" placeholder="متن تکلیف یا توضیح..." style="margin-top:10px;"></textarea>' +
+              '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:8px;">' +
+                '<label class="btn btn-ghost btn-sm" style="cursor:pointer;">📷 انتخاب عکس<input type="file" accept="image/*" style="display:none;" onchange="pickHwFreePhoto(this)" /></label>' +
+                '<img id="hwFreePrev" src="" style="display:none;width:64px;height:64px;object-fit:cover;border-radius:9px;border:1px solid var(--border);cursor:pointer;" onclick="viewPhoto(this.src)" />' +
+                '<button class="btn btn-emerald btn-sm" style="margin-right:auto;" onclick="submitFreeHw()">📤 ارسال به معلم</button>' +
               '</div>' +
-              (a.description ? '<div class="muted" style="font-size:12.5px;margin:6px 0;">' + esc(a.description) + '</div>' : '') +
-              '<div class="muted" style="font-size:11.5px;">🗓 ثبت: ' + esc(a.createdAt) + (a.dueDate ? ' • مهلت: ' + esc(a.dueDate) : '') + '</div>' +
-              statusHtml + formHtml +
-            '</div>';
-          }).join("") +
-          backBtnHtml();
+            '</div>'
+          : "";
+        var freeList = free.length
+          ? '<div class="section-title">🗂 ارسال‌های آزاد من</div>' +
+            free.map(function (x) {
+              return '<div class="card">' +
+                (x.reviewed
+                  ? '<div style="padding:7px 10px;border-radius:10px;background:rgba(16,185,129,0.13);border:1px solid rgba(16,185,129,0.4);margin-bottom:7px;">✅ تصحیح شد' + (x.score !== null ? ' — نمره: <b>' + x.score + '</b>' : '') + (x.feedback ? ' • 💬 ' + esc(x.feedback) : '') + '</div>'
+                  : '<div style="padding:7px 10px;border-radius:10px;background:rgba(245,158,11,0.12);border:1px solid rgba(245,158,11,0.4);margin-bottom:7px;">⏳ منتظر بررسی معلم</div>') +
+                (x.text ? '<div style="padding:8px 10px;background:var(--surface-2);border-radius:11px;font-size:12.5px;">' + esc(x.text) + '</div>' : '') +
+                (x.photo ? '<img src="' + x.photo + '" style="width:100%;max-height:220px;object-fit:contain;border-radius:11px;cursor:pointer;margin:6px 0;" onclick="viewPhoto(this.src)" />' : '') +
+                '<div class="muted" style="font-size:11px;">🗓 ' + esc(x.createdAt) + '</div>' +
+              '</div>';
+            }).join("")
+          : "";
+        var asgHtml = list.length
+          ? '<div class="section-title">📚 تکالیف کلاس' + (d.studentName ? ' — ' + esc(d.studentName) : '') + '</div>' +
+            list.map(function (a) {
+              var sub = a.mySubmission;
+              var statusHtml = "";
+              if (sub) {
+                if (sub.reviewed) {
+                  statusHtml = '<div style="margin:8px 0;padding:9px 11px;border-radius:11px;background:rgba(16,185,129,0.13);border:1px solid rgba(16,185,129,0.4);">' +
+                    '✅ تصحیح شد — نمره: <b>' + sub.score + '</b>' +
+                    (sub.feedback ? '<div style="margin-top:4px;font-size:12.5px;">💬 ' + esc(sub.feedback) + '</div>' : '') +
+                  '</div>';
+                } else {
+                  statusHtml = '<div style="margin:8px 0;padding:9px 11px;border-radius:11px;background:rgba(245,158,11,0.12);border:1px solid rgba(245,158,11,0.4);">⏳ ارسال شد — منتظر تصحیح معلم' + (sub.late ? ' (با تأخیر)' : '') + '</div>';
+                }
+              }
+              var formHtml = "";
+              if (session.role === "student" && (!sub || !sub.reviewed)) {
+                formHtml =
+                  '<textarea id="hwText_' + a.id + '" class="input" rows="3" placeholder="متن تکلیف یا جواب سوالات...">' + esc(sub ? sub.text : "") + '</textarea>' +
+                  '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">' +
+                    '<label class="btn btn-ghost btn-sm" style="cursor:pointer;">📷 انتخاب عکس<input type="file" accept="image/*" style="display:none;" onchange="pickHwPhoto(' + a.id + ', this)" /></label>' +
+                    '<img id="hwPrev_' + a.id + '" src="" style="display:' + (sub && sub.photo ? "inline-block" : "none") + ';width:64px;height:64px;object-fit:cover;border-radius:9px;border:1px solid var(--border);cursor:pointer;" onclick="viewPhoto(this.src)" />' +
+                    '<button class="btn btn-emerald btn-sm" style="margin-right:auto;" onclick="submitHw(' + a.id + ')">📤 ' + (sub ? "ویرایش ارسال" : "ارسال تکلیف") + '</button>' +
+                  '</div>';
+                if (sub && sub.photo) {
+                  formHtml = formHtml.replace('src=""', 'src="' + sub.photo + '"');
+                }
+              } else if (sub && sub.photo) {
+                formHtml = '<img src="' + sub.photo + '" style="width:100%;max-height:220px;object-fit:contain;border-radius:11px;cursor:pointer;" onclick="viewPhoto(this.src)" />';
+              }
+              return '<div class="card">' +
+                '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">' +
+                  '<b>📌 ' + esc(a.title) + '</b>' +
+                  '<span class="badge-pill" style="background:rgba(99,102,241,0.18);color:#C7D2FE;">' + esc(a.subject || "درس") + '</span>' +
+                '</div>' +
+                (a.description ? '<div class="muted" style="font-size:12.5px;margin:6px 0;">' + esc(a.description) + '</div>' : '') +
+                '<div class="muted" style="font-size:11.5px;">🗓 ثبت: ' + esc(a.createdAt) + (a.dueDate ? ' • مهلت: ' + esc(a.dueDate) : '') + '</div>' +
+                statusHtml + formHtml +
+              '</div>';
+            }).join("")
+          : '<div class="muted" style="margin:8px 0;">هنوز تکلیفی برای کلاس شما ثبت نشده — می‌توانید از فرم بالا تکالیف آزاد بفرستید.</div>';
+        main.innerHTML = freeForm + freeList + asgHtml + backBtnHtml();
       } catch (e) {
         main.innerHTML = '<div class="card">❌ ' + esc(e.message) + '</div>';
       }
+    }
+
+    var hwFreePhoto = "";
+    function pickHwFreePhoto(input) {
+      var f = input.files && input.files[0];
+      if (!f) return;
+      var reader = new FileReader();
+      reader.onload = function (e) {
+        var img = new Image();
+        img.onload = function () {
+          var max = 1024;
+          var w = img.width, h = img.height;
+          if (w > max || h > max) {
+            var k = Math.min(max / w, max / h);
+            w = Math.round(w * k); h = Math.round(h * k);
+          }
+          var cv = document.createElement("canvas");
+          cv.width = w; cv.height = h;
+          cv.getContext("2d").drawImage(img, 0, 0, w, h);
+          hwFreePhoto = cv.toDataURL("image/jpeg", 0.72);
+          var pv = document.getElementById("hwFreePrev");
+          if (pv) { pv.src = hwFreePhoto; pv.style.display = "inline-block"; }
+          showToast("📷 تصویر آماده ارسال است");
+        };
+        img.src = e.target.result;
+      };
+      reader.readAsDataURL(f);
+    }
+
+    async function submitFreeHw() {
+      try {
+        var txt = (document.getElementById("hwFreeText") || {}).value || "";
+        if (!txt.trim() && !hwFreePhoto) return showToast("متن یا عکس تکلیف را وارد کنید");
+        await api("/api/ms/student/hw/send", { text: txt.trim(), photo: hwFreePhoto });
+        hwFreePhoto = "";
+        showToast("✅ تکلیف برای معلم ارسال شد");
+        renderApp();
+      } catch (e) { showToast("❌ " + e.message); }
     }
 
     async function submitHw(aid) {
@@ -1350,6 +1372,10 @@ const SCHOOL_JS = String.raw`
             '<textarea id="asgDesc" class="input" rows="3" placeholder="توضیحات و سوالات..."></textarea>' +
             '<input id="asgDue" class="input" type="date" dir="ltr" placeholder="مهلت ارسال (اختیاری)" />' +
             '<button class="btn btn-emerald" onclick="createAssignment()">📤 ثبت تکلیف برای کلاس</button>' +
+          '</div>' +
+          '<div class="card" style="cursor:pointer;border:1px solid rgba(16,185,129,0.45);" onclick="hwView.assignmentId=0;renderApp()">' +
+            '<b>📥 تکالیف آزاد ارسالی دانش‌آموزان</b>' +
+            '<div class="muted" style="font-size:12px;margin-top:5px;">تکالیفی که دانش‌آموزان خارج از تکلیف مشخص فرستاده‌اند (عکس/متن) — برای مشاهده و تصحیح کلیک کنید.</div>' +
           '</div>' +
           '<div class="section-title">📚 تکالیف ثبت‌شده</div>' +
           ((list.assignments || []).length
@@ -1947,7 +1973,7 @@ const SCHOOL_JS = String.raw`
         for (var ai = 0; ai < ((asg.assignments || []).length); ai++) {
           var a = asg.assignments[ai];
           var sd = await api("/api/ms/teacher/submissions?assignmentId=" + a.id);
-          var rows = (sd.submissions || []).filter(function (x) { return x.submitted; });
+          var rows = (sd.submissions || []).filter(function (x) { return x.submitted && !x.reviewed; });
           if (!rows.length) continue;
           subSections += rows.map(function (x) {
             return '<div class="card">' +
@@ -2174,6 +2200,14 @@ const SCHOOL_JS = String.raw`
               '<button class="btn btn-gold btn-sm" onclick="goTab(\'live\')">🎥 شروع کلاس آنلاین</button>' +
               '<button class="btn btn-ghost btn-sm" onclick="activeTab=\'announce\';renderApp()">📢 اطلاعیه همگانی</button>' +
             '</div>' +
+          '</div>' +
+          '<div class="card" style="border:1px solid rgba(59,130,246,0.5);">' +
+            '<div class="section-title">📲 اتصال تلگرام معلم</div>' +
+            '<div class="muted" style="font-size:12px;">برای دریافت اعلان‌ها (تکالیف، پیام‌ها، درخواست‌ها) و تایید/رد مستقیم از تلگرام، در ربات مدرسه این دستور را بفرستید:</div>' +
+            '<div dir="ltr" style="margin:8px 0;padding:9px 11px;background:var(--surface-2);border-radius:10px;font-size:13px;">/start T' + esc((msData && msData.tg && msData.tg.username) || "نام‌کاربری‌تان") + '</div>' +
+            (msData && msData.tg && msData.tg.linked
+              ? '<div class="muted" style="font-size:11.5px;">✅ حساب تلگرام شما متصل است — روی پیام‌های دانش‌آموزان Reply کنید تا پاسخ مستقیم برایشان ارسال شود.</div>'
+              : '<div class="muted" style="font-size:11.5px;">⏱ هنوز متصل نشده — بعد از ارسال دستور بالا، وضعیت این‌جا سبز می‌شود.</div>') +
           '</div>' +
           '<div class="card"><div class="section-title">📚 منوی امکانات</div>' +
             '<div class="menu-grid">' +

@@ -265,6 +265,28 @@ export async function ensureSchoolTables(db: D1Database): Promise<void> {
       )`)
       .run();
     await db
+      .prepare(`CREATE TABLE IF NOT EXISTS ms_tg_msgmap (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        school_id INTEGER NOT NULL,
+        kind TEXT NOT NULL,
+        ref_id INTEGER NOT NULL,
+        chat_id TEXT NOT NULL,
+        tg_msg_id TEXT NOT NULL,
+        created_at TEXT
+      )`)
+      .run();
+    for (const alter of [
+      "ALTER TABLE ms_teachers ADD COLUMN tg_id TEXT DEFAULT ''",
+      "ALTER TABLE ms_students ADD COLUMN parent_tg_id TEXT DEFAULT ''",
+      "ALTER TABLE schools ADD COLUMN admin_tg_id TEXT DEFAULT ''",
+    ]) {
+      try {
+        await db.prepare(alter).run();
+      } catch (e) {
+        /* ستون قبلاً وجود دارد */
+      }
+    }
+    await db
       .prepare(`CREATE TABLE IF NOT EXISTS ms_messages (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         school_id INTEGER NOT NULL,
@@ -357,6 +379,282 @@ async function tgSend(token: string, chatId: string | number, text: string): Pro
       body: JSON.stringify({ chat_id: chatId, text }),
     });
     return r.ok;
+  } catch {
+    return false;
+  }
+}
+
+// -------------------------------------------------
+// 🔥 استریک فعالیت دانش‌آموز (روزهای پیوسته)
+export async function msGetStreak(db: D1Database, sid: number): Promise<number> {
+  const rows = await db
+    .prepare(
+      `SELECT DISTINCT d FROM (
+         SELECT substr(created_at,1,10) d FROM ms_points WHERE student_id = ?
+         UNION SELECT substr(created_at,1,10) FROM ms_submissions WHERE student_id = ?
+         UNION SELECT substr(created_at,1,10) FROM ms_missions WHERE student_id = ?
+         UNION SELECT substr(created_at,1,10) FROM ms_lab WHERE student_id = ?
+       ) ORDER BY d DESC LIMIT 400`
+    )
+    .bind(sid, sid, sid, sid)
+    .all();
+  const dates = new Set(((rows.results || []) as any[]).map((r: any) => String(r.d)));
+  let streak = 0;
+  for (let i = 0; i < 400; i++) {
+    const d = new Date(Date.now() - i * 86400000).toISOString().slice(0, 10);
+    if (dates.has(d)) streak++;
+    else if (i === 0) continue;
+    else break;
+  }
+  return streak;
+}
+
+// -------------------------------------------------
+// 📨 اعلان‌های تلگرام مدرسه
+export async function msBotToken(db: D1Database, deps: any, schoolId: number): Promise<string> {
+  try {
+    const s: any = await db.prepare("SELECT telegram_bot_token FROM schools WHERE id = ?").bind(schoolId).first();
+    return String(s?.telegram_bot_token || deps.defaultBotToken || "");
+  } catch {
+    return String(deps.defaultBotToken || "");
+  }
+}
+
+export async function msTgSend(token: string, chatId: string | number, text: string, keyboard?: any, replyTo?: number): Promise<any> {
+  if (!token || !chatId) return 0;
+  try {
+    const payload: any = { chat_id: chatId, text };
+    if (keyboard) payload.reply_markup = { inline_keyboard: keyboard };
+    if (replyTo) payload.reply_to_message_id = replyTo;
+    const r = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!r.ok) return 0;
+    const j: any = await r.json().catch(() => ({}));
+    return Number(j?.result?.message_id || 1);
+  } catch {
+    return 0;
+  }
+}
+
+export async function msTgAnswerCallback(token: string, callbackId: string, text: string): Promise<void> {
+  try {
+    await fetch(`https://api.telegram.org/bot${token}/answerCallbackQuery`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ callback_query_id: callbackId, text }),
+    });
+  } catch {
+    /* بی‌صدا */
+  }
+}
+
+export async function msTgNotifyTeachers(db: D1Database, deps: any, schoolId: number, text: string, keyboard?: any): Promise<void> {
+  try {
+    const token = await msBotToken(db, deps, schoolId);
+    const rows = await db.prepare("SELECT tg_id FROM ms_teachers WHERE school_id = ?").bind(schoolId).all();
+    for (const r of ((rows.results || []) as any[])) {
+      if (r.tg_id) await msTgSend(token, r.tg_id, text, keyboard);
+    }
+    if (!(((rows.results || []) as any[]).some((r: any) => r.tg_id))) {
+      const s: any = await db.prepare("SELECT admin_tg_id FROM schools WHERE id = ?").bind(schoolId).first();
+      if (s?.admin_tg_id) await msTgSend(token, s.admin_tg_id, text, keyboard);
+    }
+  } catch {
+    /* اعلان اختلالی در کار سامانه ایجاد نمی‌کند */
+  }
+}
+
+export async function msTgNotifyTeachersMapped(db: D1Database, deps: any, schoolId: number, text: string, kind: string, refId: number): Promise<void> {
+  try {
+    const token = await msBotToken(db, deps, schoolId);
+    const rows = await db.prepare("SELECT tg_id FROM ms_teachers WHERE school_id = ?").bind(schoolId).all();
+    const targets = ((rows.results || []) as any[]).map((r) => String(r.tg_id || "")).filter(Boolean);
+    if (!targets.length) {
+      const sc: any = await db.prepare("SELECT admin_tg_id FROM schools WHERE id = ?").bind(schoolId).first();
+      if (sc?.admin_tg_id) targets.push(String(sc.admin_tg_id));
+    }
+    for (const chatId of targets) {
+      const msgId = await msTgSend(token, chatId, text);
+      if (msgId) {
+        await db
+          .prepare("INSERT INTO ms_tg_msgmap (school_id, kind, ref_id, chat_id, tg_msg_id, created_at) VALUES (?, ?, ?, ?, ?, ?)")
+          .bind(schoolId, kind, refId, chatId, String(msgId), nowIso())
+          .run();
+      }
+    }
+  } catch {
+    /* بی‌صدا */
+  }
+}
+
+export async function msTgBroadcast(db: D1Database, deps: any, schoolId: number, classId: number | null, text: string): Promise<void> {
+  try {
+    const token = await msBotToken(db, deps, schoolId);
+    const where = classId ? "AND class_id = ?" : "";
+    const binds: any[] = classId ? [schoolId, classId] : [schoolId];
+    const stRows = await db.prepare(`SELECT tg_id, parent_tg_id FROM ms_students WHERE school_id = ? ${where}`).bind(...binds).all();
+    for (const r of ((stRows.results || []) as any[])) {
+      if (r.tg_id) await msTgSend(token, r.tg_id, text);
+      if (r.parent_tg_id) await msTgSend(token, r.parent_tg_id, text);
+    }
+    const tRows = await db.prepare("SELECT tg_id FROM ms_teachers WHERE school_id = ?").bind(schoolId).all();
+    for (const r of ((tRows.results || []) as any[])) {
+      if (r.tg_id) await msTgSend(token, r.tg_id, text);
+    }
+  } catch {
+    /* بی‌صدا */
+  }
+}
+
+export async function msTgNotifyStudent(db: D1Database, deps: any, schoolId: number, studentId: number, text: string): Promise<void> {
+  try {
+    const token = await msBotToken(db, deps, schoolId);
+    const st: any = await db.prepare("SELECT tg_id, parent_tg_id FROM ms_students WHERE id = ? AND school_id = ?").bind(studentId, schoolId).first();
+    if (!st) return;
+    if (st.tg_id) await msTgSend(token, st.tg_id, text);
+    if (st.parent_tg_id) await msTgSend(token, st.parent_tg_id, text);
+  } catch {
+    /* بی‌صدا */
+  }
+}
+
+// -------------------------------------------------
+// 🤖 پردازش آپدیت‌های تلگرام (کنترل از تلگرام + اتصال حساب‌ها)
+export async function handleMsTgUpdate(update: any, db: D1Database, deps: any): Promise<boolean> {
+  try {
+    // ===== دکمه‌های تایید/رد (callback) =====
+    const cb = update?.callback_query;
+    if (cb && String(cb.data || "").startsWith("ms:ap:")) {
+      const parts = String(cb.data).split(":");
+      const schoolId = Number(parts[2] || 0);
+      const kind = String(parts[3] || "");
+      const id = Number(parts[4] || 0);
+      const decision = String(parts[5] || "approve");
+      const token = await msBotToken(db, deps, schoolId);
+      const fromId = String(cb.from?.id || "");
+      const tRow: any = await db.prepare("SELECT id FROM ms_teachers WHERE school_id = ? AND tg_id = ?").bind(schoolId, fromId).first();
+      const scRow: any = await db.prepare("SELECT admin_tg_id FROM schools WHERE id = ?").bind(schoolId).first();
+      if (!tRow && String(scRow?.admin_tg_id || "") !== fromId) {
+        await msTgAnswerCallback(token, cb.id, "⛔ فقط معلم یا مدیر مدرسه می‌تواند تایید کند");
+        return true;
+      }
+      const approve = decision !== "reject";
+      const defaultPts = kind === "lab" ? 10 : 5;
+      const givePoints = async (sid: number, pts: number, reason: string) => {
+        if (pts > 0) {
+          await db
+            .prepare("INSERT INTO ms_points (school_id, class_id, student_id, delta, reason, created_by, created_at) VALUES (?, (SELECT class_id FROM ms_students WHERE id = ?), ?, ?, ?, ?, ?)")
+            .bind(schoolId, sid, sid, pts, reason, "معلم (تلگرام)", nowIso())
+            .run();
+        }
+      };
+      let done = false;
+      let studentId = 0;
+      if (kind === "mission") {
+        const m: any = await db.prepare("SELECT * FROM ms_missions WHERE id = ? AND school_id = ?").bind(id, schoolId).first();
+        if (m && m.status !== "approved") {
+          await db.prepare("UPDATE ms_missions SET status = ?, points = ?, feedback = ? WHERE id = ?").bind(approve ? "approved" : "rejected", approve ? defaultPts : 0, "تایید از تلگرام", id).run();
+          if (approve) await givePoints(Number(m.student_id), defaultPts, "تایید ماموریت روز");
+          studentId = Number(m.student_id);
+          done = true;
+        }
+      } else if (kind === "lab") {
+        const l: any = await db.prepare("SELECT * FROM ms_lab WHERE id = ? AND school_id = ?").bind(id, schoolId).first();
+        if (l && l.status !== "approved") {
+          await db.prepare("UPDATE ms_lab SET status = ?, points = ?, feedback = ? WHERE id = ?").bind(approve ? "approved" : "rejected", approve ? defaultPts : 0, "تایید از تلگرام", id).run();
+          if (approve) await givePoints(Number(l.student_id), defaultPts, "تایید کارگاه یادگیری");
+          studentId = Number(l.student_id);
+          done = true;
+        }
+      } else if (kind === "order") {
+        const o: any = await db.prepare("SELECT * FROM ms_shop_orders WHERE id = ? AND school_id = ?").bind(id, schoolId).first();
+        if (o && o.status === "pending") {
+          if (approve) {
+            const item: any = await db.prepare("SELECT * FROM ms_shop_items WHERE id = ?").bind(Number(o.item_id)).first();
+            const cost = Number(item?.cost || 0);
+            await db.prepare("UPDATE ms_shop_orders SET status = 'approved' WHERE id = ?").bind(id).run();
+            await db
+              .prepare("INSERT INTO ms_points (school_id, class_id, student_id, delta, reason, created_by, created_at) VALUES (?, (SELECT class_id FROM ms_students WHERE id = ?), ?, ?, ?, ?, ?)")
+              .bind(schoolId, Number(o.student_id), Number(o.student_id), -cost, "خرید جایزه: " + (item?.title || ""), "معلم (تلگرام)", nowIso())
+              .run();
+          } else {
+            await db.prepare("UPDATE ms_shop_orders SET status = 'rejected' WHERE id = ?").bind(id).run();
+          }
+          studentId = Number(o.student_id);
+          done = true;
+        }
+      }
+      await msTgAnswerCallback(token, cb.id, done ? (approve ? "✅ تایید شد" : "❌ رد شد") : "قبلاً بررسی شده بود");
+      if (done && studentId) {
+        await msTgNotifyStudent(db, deps, schoolId, studentId, approve ? "✅ درخواست شما در تلگرام تایید شد 🎉" : "❌ درخواست شما رد شد.");
+      }
+      return true;
+    }
+
+    const msg = update?.message;
+    if (!msg) return false;
+    const text = String(msg.text || "").trim();
+    const chatId = String(msg.chat?.id || "");
+
+    // ===== پاسخ معلم به پیام دانش‌آموز/والدین (دوطرفه) =====
+    if (msg.reply_to_message?.message_id && text && !text.startsWith("/")) {
+      const map: any = await db
+        .prepare("SELECT * FROM ms_tg_msgmap WHERE tg_msg_id = ? AND kind = 'msg' ORDER BY id DESC LIMIT 1")
+        .bind(String(msg.reply_to_message.message_id))
+        .first();
+      if (map) {
+        const st: any = await db.prepare("SELECT * FROM ms_students WHERE id = ?").bind(Number(map.ref_id)).first();
+        if (st) {
+          await db
+            .prepare("INSERT INTO ms_messages (school_id, class_id, student_id, from_role, text, created_at) VALUES (?, ?, ?, 'teacher', ?, ?)")
+            .bind(Number(map.school_id), Number(st.class_id), Number(st.id), text.slice(0, 2000), nowIso())
+            .run();
+          await msTgNotifyStudent(db, deps, Number(map.school_id), Number(st.id), "💬 پاسخ معلم: " + text.slice(0, 500));
+          const token = await msBotToken(db, deps, Number(map.school_id));
+          await msTgSend(token, chatId, "✅ پاسخ شما برای " + st.name + " ارسال شد.");
+          return true;
+        }
+      }
+      return false;
+    }
+
+    // ===== اتصال حساب با /start =====
+    if (text.startsWith("/start")) {
+      const arg = (text.split(/\s+/)[1] || "").trim();
+      if (/^T\w+$/i.test(arg)) {
+        const uname = arg.slice(1);
+        const t: any = await db.prepare("SELECT * FROM ms_teachers WHERE username = ?").bind(uname).first();
+        if (t) {
+          await db.prepare("UPDATE ms_teachers SET tg_id = ? WHERE id = ?").bind(chatId, Number(t.id)).run();
+          const token = await msBotToken(db, deps, Number(t.school_id));
+          await msTgSend(token, chatId, "👨‍🏫 سلام " + t.name + "! حساب تلگرام شما به سامانه مدرسه متصل شد. ✅\nاز این پس رویدادها (تکالیف، پیام‌ها، درخواست‌ها) برایتان ارسال می‌شود و می‌توانید با دکمه‌ها تایید/رد کنید یا مستقیم به پیام‌ها پاسخ دهید.");
+          return true;
+        }
+        return false;
+      }
+      if (/^\d{6}$/.test(arg)) {
+        const st: any = await db.prepare("SELECT * FROM ms_students WHERE student_code = ?").bind(arg).first();
+        if (st) {
+          await db.prepare("UPDATE ms_students SET tg_id = ? WHERE id = ?").bind(chatId, Number(st.id)).run();
+          const token = await msBotToken(db, deps, Number(st.school_id));
+          await msTgSend(token, chatId, "🎒 سلام " + st.name + "! حساب شما متصل شد. ✅\nنمرات، تاییدیه‌ها و اطلاعیه‌های مدرسه برایت ارسال می‌شود.");
+          return true;
+        }
+        const par: any = await db.prepare("SELECT * FROM ms_students WHERE parent_code = ?").bind(arg).first();
+        if (par) {
+          await db.prepare("UPDATE ms_students SET parent_tg_id = ? WHERE id = ?").bind(chatId, Number(par.id)).run();
+          const token = await msBotToken(db, deps, Number(par.school_id));
+          await msTgSend(token, chatId, "👪 سلام! حساب والدین " + par.name + " متصل شد. ✅\nگزارش‌ها و اطلاعیه‌های مدرسه برایتان ارسال می‌شود.");
+          return true;
+        }
+        return false;
+      }
+      return false;
+    }
+    return false;
   } catch {
     return false;
   }
@@ -528,10 +826,30 @@ export async function handleMultiSchoolRequest(
       return jsonOut({ session: { role: "super", kind: "ms", name: "مدیر ارشد سامانه", token } });
     }
 
+    let school: any = null;
     const code = deps.normalizeDigits(String(body.schoolCode || "")).trim();
-    if (!code) return jsonOut({ error: "کد مدرسه را وارد کنید." }, 400);
-    const school = await db.prepare("SELECT * FROM schools WHERE code = ?").bind(code).first();
-    if (!school) return jsonOut({ error: "مدرسه‌ای با این کد یافت نشد. کد مدرسه را دوباره بررسی کنید." }, 404);
+    const uName = String(body.username || "").trim();
+    const uCode = deps.normalizeDigits(String(body.code || "")).trim();
+    if (code) {
+      school = await db.prepare("SELECT * FROM schools WHERE code = ?").bind(code).first();
+      if (!school) return jsonOut({ error: "مدرسه‌ای با این کد یافت نشد. کد مدرسه را دوباره بررسی کنید." }, 404);
+    } else {
+      let rows: any[] = [];
+      if (role === "admin" && uName) {
+        rows = ((await db.prepare("SELECT * FROM schools WHERE admin_user = ?").bind(uName).all()).results || []) as any[];
+      } else if (role === "teacher" && uName) {
+        rows = ((await db.prepare("SELECT s.* FROM schools s JOIN ms_teachers t ON t.school_id = s.id WHERE t.username = ?").bind(uName).all()).results || []) as any[];
+      } else if (role === "student" && uCode) {
+        rows = ((await db.prepare("SELECT s.* FROM schools s JOIN ms_students st ON st.school_id = s.id WHERE st.student_code = ?").bind(uCode).all()).results || []) as any[];
+      } else if (role === "parent" && uCode) {
+        rows = ((await db.prepare("SELECT s.* FROM schools s JOIN ms_students st ON st.school_id = s.id WHERE st.parent_code = ?").bind(uCode).all()).results || []) as any[];
+      } else {
+        return jsonOut({ error: "نام کاربری و رمز را وارد کنید." }, 400);
+      }
+      if (rows.length === 0) return jsonOut({ error: "نام کاربری یا رمز اشتباه است." }, 401);
+      if (rows.length > 1) return jsonOut({ error: "این نام کاربری در چند مدرسه ثبت است؛ لطفاً کد مدرسه را هم وارد کنید." }, 400);
+      school = rows[0];
+    }
     if (Number(school.active) !== 1) return jsonOut({ error: "این مدرسه موقتاً توسط مدیر ارشد معلق شده است." }, 403);
     if (school.expires_at && String(school.expires_at) < todayStr()) {
       return jsonOut({ error: "اشتراک این مدرسه منقضی شده است؛ لطفاً با مدیر مدرسه یا پشتیبانی تماس بگیرید." }, 403);
@@ -623,6 +941,10 @@ export async function handleMultiSchoolRequest(
         .bind(schoolId, c)
         .first();
       if (!st) return jsonOut({ error: "کد اختصاصی والدین معتبر نیست." }, 401);
+      const ppin = deps.normalizeDigits(String(body.pin || "")).trim();
+      if (st.parent_pin && String(st.parent_pin) !== ppin) {
+        return jsonOut({ error: "رمز والدین اشتباه است." }, 401);
+      }
       const token = await deps.signToken(
         { role: "ms_parent", schoolId, studentId: Number(st.id), classId: Number(st.class_id), name: st.name },
         deps.secret
@@ -736,6 +1058,7 @@ export async function handleMultiSchoolRequest(
         .all();
 
       // امتیازات
+      const streakVal = await msGetStreak(db, stId);
       const pts = (await db.prepare("SELECT COALESCE(SUM(delta),0) s FROM ms_points WHERE student_id = ?").bind(stId).first()) as any;
       const ptsLast = await db
         .prepare("SELECT delta, reason, created_at FROM ms_points WHERE student_id = ? ORDER BY id DESC LIMIT 10")
@@ -770,6 +1093,7 @@ export async function handleMultiSchoolRequest(
           total: Number(pts?.s || 0),
           last: (ptsLast.results || []).map((p: any) => ({ delta: p.delta, reason: p.reason, date: String(p.created_at || "").split("T")[0] })),
         },
+        streak: streakVal,
         announcements: (ann.results || []).map((a: any) => ({ title: a.title, body: a.body, audience: a.audience, date: String(a.created_at || "").split("T")[0] })),
         live: getLiveRoomPublicStatus(liveKey),
       });
@@ -796,7 +1120,7 @@ export async function handleMultiSchoolRequest(
           live: getLiveRoomPublicStatus(`s${schoolId}c${cid}`),
         });
       }
-      return jsonOut({ school: schoolInfo, teacher: { id: tId, name: t.name }, classes });
+      return jsonOut({ school: schoolInfo, teacher: { id: tId, name: t.name }, classes, tg: { username: String(t.username || ""), linked: Boolean(t.tg_id) } });
     }
 
     if (isAdmin) {
@@ -844,6 +1168,63 @@ export async function handleMultiSchoolRequest(
     }
 
     return jsonOut({ error: "نقش نامعتبر." }, 400);
+  }
+
+  // ==================== 🔐 تغییر رمز (همه نقش‌ها) ====================
+  if (path === "/api/ms/account/password" && request.method === "POST") {
+    const body = (await request.json().catch(() => ({}))) as any;
+    const oldP = String(body.oldPassword || "");
+    const newP = String(body.newPassword || "").trim();
+    if (newP.length < 4) return jsonOut({ error: "رمز جدید حداقل ۴ کاراکتر باشد." }, 400);
+    if (isAdmin) {
+      if (oldP !== String(schoolRow.admin_pass)) return jsonOut({ error: "رمز فعلی اشتباه است." }, 401);
+      await db.prepare("UPDATE schools SET admin_pass = ? WHERE id = ?").bind(newP, schoolId).run();
+      return jsonOut({ ok: true });
+    }
+    if (isTeacher) {
+      const t: any = await db.prepare("SELECT * FROM ms_teachers WHERE id = ? AND school_id = ?").bind(Number(tok.teacherId || 0), schoolId).first();
+      if (!t || String(t.password) !== oldP) return jsonOut({ error: "رمز فعلی اشتباه است." }, 401);
+      await db.prepare("UPDATE ms_teachers SET password = ? WHERE id = ?").bind(newP, Number(t.id)).run();
+      return jsonOut({ ok: true });
+    }
+    if (isStudent) {
+      const st: any = await db.prepare("SELECT * FROM ms_students WHERE id = ? AND school_id = ?").bind(Number(tok.studentId || 0), schoolId).first();
+      const oldPin = deps.normalizeDigits(oldP).trim();
+      const newPin = deps.normalizeDigits(newP).trim();
+      if (!st || String(st.student_pin) !== oldPin) return jsonOut({ error: "رمز فعلی اشتباه است." }, 401);
+      if (newPin.length < 4) return jsonOut({ error: "رمز جدید حداقل ۴ رقم باشد." }, 400);
+      await db.prepare("UPDATE ms_students SET student_pin = ? WHERE id = ?").bind(newPin, Number(st.id)).run();
+      return jsonOut({ ok: true });
+    }
+    if (isParent) {
+      const st: any = await db.prepare("SELECT * FROM ms_students WHERE id = ? AND school_id = ?").bind(Number(tok.studentId || 0), schoolId).first();
+      const oldPin = deps.normalizeDigits(oldP).trim();
+      const newPin = deps.normalizeDigits(newP).trim();
+      if (!st) return jsonOut({ error: "دانش‌آموز یافت نشد." }, 404);
+      if (st.parent_pin && String(st.parent_pin) !== oldPin) return jsonOut({ error: "رمز فعلی اشتباه است." }, 401);
+      if (newPin.length < 4) return jsonOut({ error: "رمز جدید حداقل ۴ رقم باشد." }, 400);
+      await db.prepare("UPDATE ms_students SET parent_pin = ? WHERE id = ?").bind(newPin, Number(st.id)).run();
+      return jsonOut({ ok: true });
+    }
+    return jsonOut({ error: "غیرمجاز." }, 403);
+  }
+
+  // ==================== 📤 ارسال آزاد تکلیف دانش‌آموز ====================
+  if (path === "/api/ms/student/hw/send" && request.method === "POST" && isStudent) {
+    const body = (await request.json().catch(() => ({}))) as any;
+    const text = String(body.text || "").trim().slice(0, 4000);
+    const photo = String(body.photo || "");
+    if (!text && !photo) return jsonOut({ error: "متن یا عکس تکالیف را وارد کنید." }, 400);
+    if (photo.length > 900000) return jsonOut({ error: "حجم عکس زیاد است (حداکثر ۹۰۰KB)." }, 400);
+    const stId = Number(tok.studentId || 0);
+    const st: any = await db.prepare("SELECT * FROM ms_students WHERE id = ? AND school_id = ?").bind(stId, schoolId).first();
+    if (!st) return jsonOut({ error: "دانش‌آموز یافت نشد." }, 404);
+    const result = await db
+      .prepare("INSERT INTO ms_submissions (school_id, assignment_id, student_id, class_id, text, photo_b64, late, created_at) VALUES (?, 0, ?, ?, ?, ?, 0, ?)")
+      .bind(schoolId, stId, Number(st.class_id), text, photo, nowIso())
+      .run();
+    await msTgNotifyTeachers(db, deps, schoolId, `📤 تکلیف جدید از ${st.name}\n${text ? "📝 " + text.slice(0, 120) : "📷 عکس پیوست است"}`);
+    return jsonOut({ ok: true, id: Number((result as any)?.meta?.last_row_id || 0) });
   }
 
   // ==================== پنل معلم (معلم + مدیر مدرسه) ====================
@@ -944,6 +1325,7 @@ export async function handleMultiSchoolRequest(
         .prepare("INSERT INTO ms_grades (school_id, class_id, student_id, subject, title, score, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
         .bind(schoolId, cid, sid, String(body.subject || "").trim() || subs[String(cid)] || "عمومی", String(body.title || "").trim() || "نمره", score, t.name, nowIso())
         .run();
+      await msTgNotifyStudent(db, deps, schoolId, sid, `📝 نمره جدید: ${String(body.title || "نمره")} — ${score}`);
       return jsonOut({ ok: true });
     }
 
@@ -1024,6 +1406,31 @@ export async function handleMultiSchoolRequest(
 
     if (path === "/api/ms/teacher/submissions" && request.method === "GET") {
       const aid = Number(url.searchParams.get("assignmentId") || 0);
+      if (aid === 0) {
+        const freeRows = await db
+          .prepare(
+            `SELECT sub.*, st.name AS student_name FROM ms_submissions sub JOIN ms_students st ON st.id = sub.student_id
+             WHERE sub.assignment_id = 0 AND sub.school_id = ? ORDER BY sub.id DESC LIMIT 60`
+          )
+          .bind(schoolId)
+          .all();
+        return jsonOut({
+          assignment: { id: 0, title: "تکالیف آزاد ارسالی", description: "", dueDate: "", subject: "" },
+          submissions: ((freeRows.results || []) as any[]).map((s) => ({
+            submissionId: Number(s.id),
+            studentId: Number(s.student_id),
+            name: s.student_name,
+            submitted: true,
+            text: s.text,
+            photo: s.photo_b64 || "",
+            score: s.score !== null && s.score !== undefined ? Number(s.score) : null,
+            feedback: s.feedback || "",
+            reviewed: Boolean(s.reviewed_at),
+            late: Number(s.late) === 1,
+            createdAt: String(s.created_at || "").split("T")[0],
+          })),
+        });
+      }
       const a: any = await db.prepare("SELECT * FROM ms_assignments WHERE id = ? AND school_id = ?").bind(aid, schoolId).first();
       if (!a) return jsonOut({ error: "تکلیف یافت نشد." }, 404);
       const cls = await assertClass(Number(a.class_id));
@@ -1064,9 +1471,10 @@ export async function handleMultiSchoolRequest(
       const sid = Number(body.submissionId || 0);
       const s: any = await db.prepare("SELECT * FROM ms_submissions WHERE id = ? AND school_id = ?").bind(sid, schoolId).first();
       if (!s) return jsonOut({ error: "تکلیفی از دانش‌آموز یافت نشد." }, 404);
-      const a: any = await db.prepare("SELECT * FROM ms_assignments WHERE id = ?").bind(Number(s.assignment_id)).first();
-      if (!a) return jsonOut({ error: "تکلیف یافت نشد." }, 404);
-      const cls = await assertClass(Number(a.class_id));
+      const isFreeHw = Number(s.assignment_id) === 0;
+      const a: any = isFreeHw ? null : await db.prepare("SELECT * FROM ms_assignments WHERE id = ?").bind(Number(s.assignment_id)).first();
+      if (!isFreeHw && !a) return jsonOut({ error: "تکلیف یافت نشد." }, 404);
+      const cls = await assertClass(Number(isFreeHw ? s.class_id : a.class_id));
       if (!cls) return jsonOut({ error: "این کلاس در اختیار شما نیست." }, 403);
       const score = Number(body.score);
       if (!isFinite(score)) return jsonOut({ error: "نمره معتبر وارد کنید." }, 400);
@@ -1091,6 +1499,7 @@ export async function handleMultiSchoolRequest(
         .prepare("INSERT INTO ms_announcements (school_id, class_id, audience, title, body, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
         .bind(schoolId, cid, body.audience === "teachers" ? "teachers" : "all", title, text, t.name, nowIso())
         .run();
+      if (body.audience !== "teachers") await msTgBroadcast(db, deps, schoolId, cid, `📢 اطلاعیه: ${title}\n${text.slice(0, 300)}`);
       return jsonOut({ ok: true });
     }
   }
@@ -1484,9 +1893,22 @@ export async function handleMultiSchoolRequest(
       .bind(stId)
       .all();
     const subMap: Record<number, any> = {};
-    for (const s of (subsRows.results || []) as any[]) subMap[Number(s.assignment_id)] = s;
+    for (const s of (subsRows.results || []) as any[]) if (Number(s.assignment_id) !== 0) subMap[Number(s.assignment_id)] = s;
+    const freeSubs = ((subsRows.results || []) as any[])
+      .filter((x) => Number(x.assignment_id) === 0)
+      .map((s) => ({
+        id: Number(s.id),
+        text: s.text,
+        photo: s.photo_b64 || "",
+        late: Number(s.late) === 1,
+        score: s.score !== null && s.score !== undefined ? Number(s.score) : null,
+        feedback: s.feedback || "",
+        reviewed: Boolean(s.reviewed_at),
+        createdAt: String(s.created_at || "").split("T")[0],
+      }));
     return jsonOut({
       studentName: st.name,
+      freeSubs,
       assignments: (rows.results || []).map((a: any) => {
         const s = subMap[Number(a.id)];
         return {
@@ -1551,6 +1973,7 @@ export async function handleMultiSchoolRequest(
         .bind(schoolId, aid, stId, Number(a.class_id), text, photo, late, nowIso())
         .run();
     }
+    await msTgNotifyTeachers(db, deps, schoolId, `📤 تکلیف «${a.title}» از ${st.name} ارسال شد${late ? " (با تأخیر)" : ""}`);
     return jsonOut({ ok: true, late: late === 1 });
   }
 
@@ -1600,6 +2023,7 @@ export async function handleMultiSchoolRequest(
       .prepare("INSERT INTO ms_announcements (school_id, class_id, audience, title, body, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
       .bind(schoolId, cid, audience, title, text, schoolRow.admin_name || "مدیر مدرسه", nowIso())
       .run();
+    if (audience !== "teachers") await msTgBroadcast(db, deps, schoolId, cid, `📢 اطلاعیه: ${title}\n${text.slice(0, 300)}`);
     return jsonOut({ ok: true });
   }
 
@@ -1741,6 +2165,176 @@ export async function handleMultiSchoolRequest(
       return jsonOut({ ok: true, newPass });
     }
 
+    // ==================== 📦 مهاجرت داده‌های کلاس قبلی (legacy → سامانه) ====================
+    if (path === "/api/ms/super/migrate-legacy" && request.method === "POST") {
+      const body = (await request.json().catch(() => ({}))) as any;
+      const schoolCode = String(body.schoolCode || "").trim();
+      const teacherUsername = String(body.teacherUsername || "").trim();
+      const classLabel = String(body.classLabel || "").trim();
+      const teacherTgId = String(body.teacherTgId || "").trim();
+      const skipPhotos = body.skipPhotos === true;
+      const summary: any = { points: 0, studentsAdded: 0, studentsMatched: 0, homework: 0, photos: 0, skipped: 0, errors: [] };
+      const school: any = schoolCode ? await db.prepare("SELECT * FROM schools WHERE code = ?").bind(schoolCode).first() : null;
+      if (!school) return jsonOut({ error: "مدرسه با این کد یافت نشد." }, 404);
+      const schoolId = Number(school.id);
+
+      // توکن ربات مدرسه = توکن پیش‌فرض سامانه (رایگان و موجود)
+      if (!school.telegram_bot_token && deps.defaultBotToken) {
+        await db.prepare("UPDATE schools SET telegram_bot_token = ? WHERE id = ?").bind(String(deps.defaultBotToken), schoolId).run();
+      }
+      if (teacherTgId && teacherUsername) {
+        await db.prepare("UPDATE ms_teachers SET tg_id = ? WHERE school_id = ? AND username = ?").bind(teacherTgId, schoolId, teacherUsername).run();
+      }
+      await db.prepare("CREATE TABLE IF NOT EXISTS ms_migration_log (key TEXT PRIMARY KEY, at TEXT)").run();
+
+      const normName = (x: string) =>
+        String(x || "")
+          .replace(/[\u200c\u200d\u200e\u200f]/g, "")
+          .replace(/ي/g, "ی")
+          .replace(/ك/g, "ک")
+          .replace(/\s+/g, "")
+          .trim();
+
+      // کلاس مقصد
+      let cls: any = null;
+      if (classLabel) cls = await db.prepare("SELECT * FROM ms_classes WHERE school_id = ? AND (grade_name || '-' || class_name) = ?").bind(schoolId, classLabel).first();
+      if (!cls) cls = await db.prepare("SELECT * FROM ms_classes WHERE school_id = ? ORDER BY id DESC LIMIT 1").bind(schoolId).first();
+      if (!cls) return jsonOut({ error: "کلاس مقصد یافت نشد؛ ابتدا کلاس را بسازید." }, 404);
+      const classId = Number(cls.id);
+
+      // نقشه دانش‌آموزان فعلی با کلید نرمال‌شده
+      const msRows = ((await db.prepare("SELECT * FROM ms_students WHERE school_id = ? AND class_id = ?").bind(schoolId, classId).all()).results || []) as any[];
+      const byName: Record<string, any> = {};
+      for (const r of msRows) byName[normName(r.name)] = r;
+
+      // دانش‌آموزان قدیمی
+      let legacyStudents: any[] = [];
+      try {
+        legacyStudents = ((await db.prepare("SELECT * FROM students").all()).results || []) as any[];
+      } catch (e) {
+        return jsonOut({ error: "جدول قدیمی students در دیتابیس یافت نشد." }, 404);
+      }
+      const legacyById: Record<number, any> = {};
+      const usedCodes = new Set(msRows.map((r) => String(r.student_code)));
+      const randCode = () => {
+        let c = "";
+        do {
+          c = String(Math.floor(100000 + Math.random() * 900000));
+        } while (usedCodes.has(c));
+        usedCodes.add(c);
+        return c;
+      };
+      for (const ls of legacyStudents as any[]) {
+        const nm = normName(ls.name);
+        if (!nm || nm === normName("تست")) continue;
+        legacyById[Number(ls.user_id)] = ls;
+        let m = byName[nm];
+        if (!m) {
+          // دانش‌آموز جدید بساز (مثلاً مریم خاتمی)
+          const studentCode = randCode();
+          const parentCode = randCode();
+          const r = await db
+            .prepare("INSERT INTO ms_students (school_id, class_id, name, student_code, parent_code, student_pin, created_at) VALUES (?, ?, ?, ?, ?, '1234', ?)")
+            .bind(schoolId, classId, String(ls.name || "").replace(/\s+/g, " ").trim(), studentCode, parentCode, nowIso())
+            .run();
+          m = { id: Number(r.meta?.last_row_id || 0), name: ls.name, class_id: classId, student_code: studentCode, parent_code: parentCode };
+          byName[nm] = m;
+          summary.studentsAdded++;
+        } else {
+          summary.studentsMatched++;
+        }
+      }
+
+      // امتیازهای قبلی — یک ردیف برای هر دانش‌آموز
+      for (const uid of Object.keys(legacyById)) {
+        const ls = legacyById[Number(uid)];
+        const m = byName[normName(ls.name)];
+        if (!m || !Number(ls.score)) continue;
+        const done = await db.prepare("SELECT key FROM ms_migration_log WHERE key = ?").bind("pts:" + uid).first();
+        if (done) continue;
+        await db
+          .prepare("INSERT INTO ms_points (school_id, class_id, student_id, delta, reason, created_by, created_at) VALUES (?, ?, ?, ?, 'امتیازهای قبلی کلاس', 'مهاجرت', ?)")
+          .bind(schoolId, classId, Number(m.id), Number(ls.score), String(ls.joined || nowIso()))
+          .run();
+        await db.prepare("INSERT OR REPLACE INTO ms_migration_log (key, at) VALUES (?, ?)").bind("pts:" + uid, nowIso()).run();
+        summary.points++;
+      }
+
+      // تکالیف قبلی → ms_submissions (assignment_id = 0)
+      let hwRows: any[] = [];
+      try {
+        hwRows = ((await db.prepare("SELECT * FROM homework ORDER BY id").all()).results || []) as any[];
+      } catch (e) {
+        summary.errors.push("جدول homework یافت نشد");
+      }
+      const token = String(school.telegram_bot_token || deps.defaultBotToken || "");
+      for (const hw of hwRows as any[]) {
+        const hkey = "hw:" + Number(hw.id);
+        const done = await db.prepare("SELECT key FROM ms_migration_log WHERE key = ?").bind(hkey).first();
+        if (done) {
+          summary.skipped++;
+          continue;
+        }
+        const m = byName[normName(hw.name)];
+        if (!m) {
+          summary.skipped++;
+          await db.prepare("INSERT OR REPLACE INTO ms_migration_log (key, at) VALUES (?, ?)").bind(hkey, nowIso()).run();
+          continue;
+        }
+        let text = "";
+        let photo = "";
+        try {
+          const media: any = await db.prepare("SELECT * FROM submission_media WHERE item_type = 'hw' AND item_id = ?").bind(Number(hw.id)).first();
+          if (media) {
+            text = String(media.content_text || "").trim();
+            const fid = String(media.tg_file_id || "").trim();
+            if (fid && token && !skipPhotos) {
+              try {
+                const gr = await fetch(`https://api.telegram.org/bot${token}/getFile?file_id=${encodeURIComponent(fid)}`);
+                const gj: any = await gr.json().catch(() => ({}));
+                const fp = String(gj?.result?.file_path || "");
+                if (fp && gr.ok) {
+                  const fr = await fetch(`https://api.telegram.org/file/bot${token}/${fp}`);
+                  if (fr.ok) {
+                    const buf = new Uint8Array(await fr.arrayBuffer());
+                    if (buf.length > 0 && buf.length < 650000) {
+                      let bin = "";
+                      for (let bi = 0; bi < buf.length; bi++) bin += String.fromCharCode(buf[bi]);
+                      photo = "data:image/jpeg;base64," + btoa(bin);
+                      summary.photos++;
+                    }
+                  }
+                }
+              } catch (e) {
+                /* دانلود عکس اختیاری است */
+              }
+            }
+          }
+        } catch (e) {
+          /* بدون مدیا ادامه بده */
+        }
+        if (!text) text = String(hw.type || "").includes("عکس") ? "📷 تکلیف عکس (از تلگرام)" : "✍️ تکلیف متنی (از تلگرام)";
+        const hwScore = Number(hw.score || 0);
+        await db
+          .prepare("INSERT INTO ms_submissions (school_id, assignment_id, student_id, class_id, text, photo_b64, late, score, feedback, reviewed_at, created_at) VALUES (?, 0, ?, ?, ?, ?, 0, ?, ?, ?, ?)")
+          .bind(
+            schoolId,
+            Number(m.id),
+            classId,
+            text,
+            photo,
+            hwScore > 0 ? hwScore : null,
+            String(hw.feedback || ""),
+            String(hw.date || nowIso()),
+            String(hw.date || nowIso())
+          )
+          .run();
+        await db.prepare("INSERT OR REPLACE INTO ms_migration_log (key, at) VALUES (?, ?)").bind(hkey, nowIso()).run();
+        summary.homework++;
+      }
+      return jsonOut({ ok: true, schoolId, classId, summary });
+    }
+
     if (path === "/api/ms/super/announce" && request.method === "POST") {
       const body = (await request.json().catch(() => ({}))) as any;
       const title = String(body.title || "").trim();
@@ -1822,6 +2416,7 @@ export async function handleMultiSchoolRequest(
       points,
       rank: rank || scored.length,
       totalStudents: scored.length,
+      streak: await msGetStreak(db, stId),
     });
   }
 
@@ -1842,6 +2437,7 @@ export async function handleMultiSchoolRequest(
       .prepare("UPDATE ms_missions SET proof = ?, status = 'pending' WHERE id = ?")
       .bind(proof, Number(mission.id))
       .run();
+    await msTgNotifyTeachers(db, deps, schoolId, `🎯 گزارش ماموریت روز از ${tok.name || "دانش‌آموز"}: ${proof.slice(0, 140)}`);
     return jsonOut({ ok: true });
   }
 
@@ -1878,6 +2474,7 @@ export async function handleMultiSchoolRequest(
       .prepare("INSERT INTO ms_lab (school_id, class_id, student_id, tool, topic, summary, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
       .bind(schoolId, Number(st.class_id), stId, tool, String(body.topic || "").trim(), summary, nowIso())
       .run();
+    await msTgNotifyTeachers(db, deps, schoolId, `🧠 گزارش کارگاه (${tool}) از ${st.name}: ${summary.slice(0, 140)}`);
     return jsonOut({ ok: true });
   }
 
@@ -1923,6 +2520,7 @@ export async function handleMultiSchoolRequest(
       .prepare("INSERT INTO ms_shop_orders (school_id, item_id, student_id, created_at) VALUES (?, ?, ?, ?)")
       .bind(schoolId, Number(item.id), stId, nowIso())
       .run();
+    await msTgNotifyTeachers(db, deps, schoolId, `🛒 درخواست خرید جایزه «${item.title}» (${item.cost} ⭐) از ${tok.name || "دانش‌آموز"}`);
     return jsonOut({ ok: true });
   }
 
@@ -2007,6 +2605,7 @@ export async function handleMultiSchoolRequest(
       .prepare("INSERT INTO ms_messages (school_id, class_id, student_id, from_role, text, created_at) VALUES (?, ?, ?, ?, ?, ?)")
       .bind(schoolId, Number(st.class_id), stId, fromRole, text, nowIso())
       .run();
+    await msTgNotifyTeachersMapped(db, deps, schoolId, `💬 پیام ${isParent ? "والدین" : "دانش‌آموز"} ${st.name}: ${text.slice(0, 140)}\n(برای پاسخ، روی همین پیام Reply کنید)`, "msg", stId);
     return jsonOut({ ok: true });
   }
   // ---- ⏰ ددلاین‌ها (دانش‌آموز/والد) ----
@@ -2128,6 +2727,7 @@ export async function handleMultiSchoolRequest(
         .bind(approve ? "approved" : "rejected", approve ? points : 0, feedback, id)
         .run();
       if (approve) await givePoints(Number(m.student_id), points, "تایید ماموریت روز");
+      await msTgNotifyStudent(db, deps, schoolId, Number(m.student_id), approve ? `✅ ماموریت روز تایید شد (+${points} ⭐)${feedback ? "\n💬 " + feedback : ""}` : `❌ ماموریت روز تایید نشد${feedback ? "\n💬 " + feedback : ""}`);
       return jsonOut({ ok: true });
     }
     if (kind === "lab") {
@@ -2138,6 +2738,7 @@ export async function handleMultiSchoolRequest(
         .bind(approve ? "approved" : "rejected", approve ? points : 0, feedback, id)
         .run();
       if (approve) await givePoints(Number(l.student_id), points, "تایید کارگاه یادگیری");
+      await msTgNotifyStudent(db, deps, schoolId, Number(l.student_id), approve ? `✅ گزارش کارگاه تایید شد (+${points} ⭐)${feedback ? "\n💬 " + feedback : ""}` : `❌ گزارش کارگاه تایید نشد${feedback ? "\n💬 " + feedback : ""}`);
       return jsonOut({ ok: true });
     }
     if (kind === "order") {
@@ -2154,6 +2755,7 @@ export async function handleMultiSchoolRequest(
       } else {
         await db.prepare("UPDATE ms_shop_orders SET status = 'rejected' WHERE id = ?").bind(id).run();
       }
+      await msTgNotifyStudent(db, deps, schoolId, Number(o.student_id), approve ? "✅ جایزه شما تایید و تحویل شد 🎁" : "❌ سفارش جایزه رد شد.");
       return jsonOut({ ok: true });
     }
     return jsonOut({ error: "نوع نامعتبر." }, 400);

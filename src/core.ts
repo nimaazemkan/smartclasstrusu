@@ -5,6 +5,7 @@ import { handleLiveClassRequest, getLiveRoomPublicStatus } from "./live-class";
 import { LIVE_CLASS_CSS, LIVE_CLASS_JS } from "./live-class-client";
 import {
   handleMultiSchoolRequest,
+  handleMsTgUpdate,
   msClassAccess,
   msMarkPresent,
   msNotifyClassStarted,
@@ -12088,7 +12089,19 @@ export default {
       try { await resetScores(env.telegram_bot_db); return new Response(JSON.stringify({ ok: true }), { headers: { "Content-Type": "application/json", ...corsHeaders } }); } catch (e) { return new Response(JSON.stringify({ ok: false }), { status: 500, headers: { "Content-Type": "application/json", ...corsHeaders } }); }
     }
 
-    if (url.pathname === "/webhook") { const bot = createBot(env); return webhookCallback(bot, "std/http")(request); }
+    if (url.pathname === "/webhook") {
+      // 🎯 تلگرام مدرسه‌ای: اگر آپدیت مربوط به سامانه مدارس (تایید/رد، پاسخ، /start) بود همین‌جا پردازش می‌شود
+      try {
+        const upd: any = await request.clone().json();
+        const handled = await handleMsTgUpdate(upd, env.telegram_bot_db, {
+          defaultBotToken: BOT_TOKEN,
+          normalizeDigits,
+        } as any);
+        if (handled) return new Response("ok");
+      } catch (e) {}
+      const bot = createBot(env);
+      return webhookCallback(bot, "std/http")(request);
+    }
     if (url.pathname === "/") return new Response(buildAppHtml(""), { headers: { "Content-Type": "text/html; charset=utf-8" } });
     return new Response("Not Found", { status: 404 });
   },

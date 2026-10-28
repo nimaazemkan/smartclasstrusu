@@ -3067,7 +3067,7 @@ export async function handleMultiSchoolRequest(
   // ---- ⏰ ددلاین‌ها و امتحانات ----
   const teachHasClass = async (cid: number): Promise<boolean> => {
     if (isAdmin) return true;
-    const trow: any = await db.prepare("SELECT subjects FROM ms_teachers WHERE id = ? AND school_id = ?").bind(Number(tok.userId || 0), schoolId).first();
+    const trow: any = await db.prepare("SELECT subjects FROM ms_teachers WHERE id = ? AND school_id = ?").bind(Number(tok.teacherId || tok.userId || 0), schoolId).first();
     if (!trow) return false;
     try {
       const subs = JSON.parse(String(trow.subjects || "{}"));

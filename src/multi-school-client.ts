@@ -150,7 +150,7 @@ const SCHOOL_JS = String.raw`
       var data = null;
       try { data = await res.json(); } catch (e) {}
       if (!res.ok || (data && data.error)) {
-        if (res.status === 401 && session && path !== "/api/ms/login") {
+        if (res.status === 401 && session && path !== "/api/ms/login" && path.indexOf("/password") === -1) {
           logout();
         }
         throw new Error((data && data.error) || ("خطای ارتباط (" + res.status + ")"));
@@ -256,6 +256,24 @@ const SCHOOL_JS = String.raw`
           '<label>رمز مدیر ارشد</label>' +
           '<input id="msPass" class="input" type="password" placeholder="رمز مدیر ارشد سامانه" />';
       }
+      if (showRegister) {
+        main.innerHTML =
+          '<div class="auth-wrap"><div class="auth-card">' +
+            '<div class="auth-hero" style="padding:16px 12px;"><div style="font-size:32px;">✍️</div><h1 style="font-size:17px;">ثبت‌نام دانش‌آموز</h1>' +
+            '<p>کد مدرسه و کد کلاس را از معلم بگیرید</p></div>' +
+            '<label>کد مدرسه</label><input id="rgSchool" class="input" inputmode="numeric" placeholder="مثلاً 4915" />' +
+            '<label>کد کلاس</label><input id="rgJoin" class="input" inputmode="numeric" placeholder="کد ۶ رقمی کلاس" />' +
+            '<label>نام و نام خانوادگی</label><input id="rgName" class="input" placeholder="نام کامل" />' +
+            '<label>کد ملی (نام کاربری شما)</label><input id="rgNat" class="input" inputmode="numeric" placeholder="کد ملی ۱۰ رقمی" />' +
+            '<label>تاریخ تولد شمسی (اختیاری)</label><input id="rgBday" class="input" dir="ltr" placeholder="۱۴۰۴/۰۵/۱۲" />' +
+            '<div class="muted" style="font-size:11px;margin-top:4px;">📅 فقط به شمسی — مثال: ۱۴۰۴/۰۵/۱۲ (در همان روز تولد، پیام تبریک معلم ارسال می‌شود 🎂)</div>' +
+            '<label>رمز عبور</label><input id="rgPin" class="input" inputmode="numeric" placeholder="پیش‌فرض 1234" />' +
+            '<button class="btn btn-emerald" style="width:100%;margin-top:12px;" onclick="submitRegister()">ثبت‌نام</button>' +
+            '<button class="btn btn-ghost" style="width:100%;margin-top:8px;" onclick="showRegister=false;renderApp()">🔙 بازگشت به صفحه ورود</button>' +
+          '</div></div>';
+        return;
+      }
+
       main.innerHTML =
         '<div class="auth-wrap"><div class="auth-card">' +
           '<div class="auth-hero">' +
@@ -273,24 +291,11 @@ const SCHOOL_JS = String.raw`
             '<input id="msSchoolCode" class="input" inputmode="numeric" placeholder="کد مدرسه (اختیاری)" style="margin-top:8px;" />' +
           '</details>' +
           '<button class="btn btn-primary" style="width:100%;margin-top:8px;" onclick="submitLogin()">ورود</button>' +
-          '<button class="btn btn-ghost" style="width:100%;margin-top:8px;" onclick="showRegister=!showRegister;renderApp()">✍️ ثبت‌نام دانش‌آموز جدید</button>' +
+          '<button class="btn btn-ghost" style="width:100%;margin-top:8px;" onclick="showRegister=true;renderApp()">✍️ ثبت‌نام دانش‌آموز جدید</button>' +
           '<div class="muted" style="text-align:center;font-size:11.5px;margin-top:12px;">' +
             '🔑 رمز خود را بعد از ورود از بخش «پروفایل» عوض کنید' +
           '</div>' +
-        '</div></div>' +
-        (showRegister
-          ? '<div class="auth-card" style="margin-top:14px;">' +
-              '<div class="auth-hero" style="padding:16px 12px;"><div style="font-size:32px;">✍️</div><h1 style="font-size:17px;">ثبت‌نام دانش‌آموز</h1>' +
-              '<p>کد مدرسه و کد کلاس را از معلم بگیرید</p></div>' +
-              '<label>کد مدرسه</label><input id="rgSchool" class="input" inputmode="numeric" placeholder="مثلاً 4915" />' +
-              '<label>کد کلاس</label><input id="rgJoin" class="input" inputmode="numeric" placeholder="کد ۶ رقمی کلاس" />' +
-              '<label>نام و نام خانوادگی</label><input id="rgName" class="input" placeholder="نام کامل" />' +
-              '<label>کد ملی (نام کاربری شما)</label><input id="rgNat" class="input" inputmode="numeric" placeholder="کد ملی ۱۰ رقمی" />' +
-              '<label>تاریخ تولد شمسی (اختیاری)</label><input id="rgBday" class="input" dir="ltr" placeholder="۱۴۰۴/۰۵/۱۲" />' +
-              '<label>رمز عبور</label><input id="rgPin" class="input" inputmode="numeric" placeholder="پیش‌فرض 1234" />' +
-              '<button class="btn btn-emerald" style="width:100%;margin-top:12px;" onclick="submitRegister()">ثبت‌نام</button>' +
-            '</div>'
-          : "");
+        '</div></div>';
     }
 
     async function submitLogin(presetBody) {
@@ -416,6 +421,7 @@ const SCHOOL_JS = String.raw`
             '<input id="profUser" class="input" placeholder="کد ملی / نام کاربری جدید" value="' + esc(myUser) + '" />' +
             '<div class="section-title" style="margin-top:12px;">🎂 تاریخ تولد</div>' +
             '<input id="profBday" class="input" dir="ltr" placeholder="۱۴۰۴/۰۵/۱۲ (شمسی)" value="' + esc(gregorianToJalali(myBday)) + '" />' +
+            '<div class="muted" style="font-size:11px;margin-top:4px;">📅 به شمسی — مثال: ۱۴۰۴/۰۵/۱۲ (در روز تولد، پیام تبریک از طرف معلم ارسال می‌شود 🎂)</div>' +
             '<button class="btn btn-emerald" style="width:100%;margin-top:12px;" onclick="saveProfile()">ذخیره تغییرات</button>' +
           '</div>') +
           '<div class="card">' +
@@ -494,13 +500,15 @@ const SCHOOL_JS = String.raw`
 
       var main = document.getElementById("mainView");
       if (activeTab === "live") {
-        if (session.role === "teacher") {
+        if (session.role === "teacher" || session.role === "admin") {
           main.innerHTML = '<div class="card" style="text-align:center;">⏳ در حال آماده‌سازی اتاق کلاس...</div>';
           Promise.resolve()
             .then(function () { return ensureHome(); })
             .then(function () {
               if (!resolveSelClass()) {
-                main.innerHTML = '<div class="card">⚠️ هنوز کلاسی به شما اختصاص داده نشده است؛ از مدیر مدرسه بخواهید کلاس‌های شما را تعریف کند.</div>';
+                main.innerHTML = session.role === "admin"
+                  ? '<div class="card">⚠️ هنوز کلاسی در مدرسه تعریف نشده است؛ از بخش «مدیریت مدرسه ← کلاس‌ها» اضافه کنید.</div>'
+                  : '<div class="card">⚠️ هنوز کلاسی به شما اختصاص داده نشده است؛ از مدیر مدرسه بخواهید کلاس‌های شما را تعریف کند.</div>';
                 return;
               }
               window.LIVE_ROOM_KEY = myRoomKey();
@@ -515,7 +523,15 @@ const SCHOOL_JS = String.raw`
       }
       if (session.role === "student" || session.role === "parent") renderStudent(main);
       else if (session.role === "teacher") renderTeacher(main);
-      else if (session.role === "admin") renderAdmin(main);
+      else if (session.role === "admin") {
+        // تب‌های مدیریتی -> renderAdmin؛ بقیه تب‌ها (داشبورد/صندوق/حضور/تکالیف/...) -> renderTeacher
+        if (activeTab === "home" || activeTab === "admin" || activeTab === "classes" || activeTab === "teachers" ||
+            activeTab === "students" || activeTab === "reports" || activeTab === "settings" || activeTab === "announce") {
+          renderAdmin(main);
+        } else {
+          renderTeacher(main);
+        }
+      }
       else if (session.role === "super") renderSuper(main);
     }
 
@@ -530,7 +546,7 @@ const SCHOOL_JS = String.raw`
     function myRoomKey() {
       if (!session || !session.schoolId) return "";
       if (session.role === "student") return "s" + session.schoolId + "c" + session.classId;
-      if (session.role === "teacher") {
+      if (session.role === "teacher" || session.role === "admin") {
         return resolveSelClass() ? "s" + session.schoolId + "c" + selClassId : "";
       }
       return "";
@@ -877,7 +893,7 @@ const SCHOOL_JS = String.raw`
       main.innerHTML = '<div class="card" style="text-align:center;">⏳ در حال دریافت اطلاعات...</div>';
       try {
         if (activeTab === "pass") { await renderPass(main); return; }
-        if (activeTab === "home") {
+        if (activeTab === "home" || activeTab === "admin") {
           var d = await api("/api/ms/home");
           msData = d;
           main.innerHTML =
@@ -894,14 +910,16 @@ const SCHOOL_JS = String.raw`
               '<div class="stat-card"><div class="stat-ico">⚠️</div><div class="stat-num">' + d.stats.notPresentToday + '</div><div class="stat-label">حاضر نشده امروز</div></div>' +
             '</div>' +
             '<div class="card" style="margin-top:12px;">' +
-              '<div class="section-title">⚡ دسترسی سریع</div>' +
-              '<div style="display:flex;flex-wrap:wrap;gap:8px;">' +
-                '<button class="btn btn-sm" onclick="goTab(\'students\')">🎒 ثبت‌نام دانش‌آموز</button>' +
-                '<button class="btn btn-sm" onclick="goTab(\'teachers\')">👨‍🏫 تعریف معلم</button>' +
-                '<button class="btn btn-sm" onclick="goTab(\'classes\')">🏗 ساخت کلاس</button>' +
-                '<button class="btn btn-ghost btn-sm" onclick="activeTab=\'settings\';renderApp()">⚙️ تنظیمات مدرسه</button>' +
-                '<button class="btn btn-ghost btn-sm" onclick="activeTab=\'announce\';renderApp()">📢 ارسال اطلاعیه</button>' +
+              '<div class="section-title">⚡ مدیریت مدرسه</div>' +
+              '<div class="menu-grid">' +
+                '<button class="menu-item" onclick="goTab(\'students\')"><span>➕</span>ثبت‌نام دانش‌آموز جدید</button>' +
+                '<button class="menu-item" onclick="goTab(\'teachers\')"><span>👨‍🏫</span>معلمان</button>' +
+                '<button class="menu-item" onclick="goTab(\'classes\')"><span>🏗</span>کلاس‌ها</button>' +
+                '<button class="menu-item" onclick="goTab(\'reports\')"><span>📈</span>گزارش‌ها</button>' +
+                '<button class="menu-item" onclick="goTab(\'announce\')"><span>📢</span>ارسال اطلاعیه</button>' +
+                '<button class="menu-item" onclick="goTab(\'settings\')"><span>⚙️</span>تنظیمات مدرسه</button>' +
               '</div>' +
+            '</div>' +
             '</div>' +
             '<div class="section-title">📢 آخرین اطلاعیه‌ها</div>' +
             '<div class="card">' +
@@ -914,6 +932,7 @@ const SCHOOL_JS = String.raw`
         } else if (activeTab === "classes") {
           var c = await api("/api/ms/admin/classes");
           main.innerHTML =
+            adminBackHtml() +
             '<div class="section-title">🏗 کلاس‌های مدرسه</div>' +
             '<div class="card">' +
               '<div style="display:flex;gap:8px;">' +
@@ -933,6 +952,7 @@ const SCHOOL_JS = String.raw`
           adminAll.classes = t.classes || [];
           window._lastTeachers = t.teachers || [];
           main.innerHTML =
+            adminBackHtml() +
             '<div class="section-title">👨‍🏫 معلمان مدرسه</div>' +
             '<div class="card">' +
               '<input id="tName" class="input" placeholder="نام و نام خانوادگی معلم" />' +
@@ -963,6 +983,7 @@ const SCHOOL_JS = String.raw`
           adminAll.students = sData.students || [];
           adminAll.classes = sData.classes || [];
           main.innerHTML =
+            adminBackHtml() +
             '<div class="section-title">🎒 دانش‌آموزان مدرسه</div>' +
             '<div class="card">' +
               '<select id="stClassFilter" class="input" onchange="filterStudents(this.value)">' +
@@ -977,6 +998,7 @@ const SCHOOL_JS = String.raw`
               '<input id="nsName" class="input" placeholder="نام و نام خانوادگی دانش‌آموز" />' +
               '<input id="nsNat" class="input" inputmode="numeric" placeholder="کد ملی (نام کاربری — اختیاری)" style="margin-top:8px;" />' +
               '<input id="nsBday" class="input" dir="ltr" placeholder="تولد شمسی — ۱۴۰۴/۰۵/۱۲ (اختیاری)" style="margin-top:8px;" />' +
+              '<div class="muted" style="font-size:11px;margin-top:4px;">📅 به شمسی — مثال: ۱۴۰۴/۰۵/۱۲ (اختیاری)</div>' +
               '<select id="nsClass" class="input">' +
                 adminAll.classes.map(function (c2) {
                   return '<option value="' + c2.id + '">' + esc(c2.label) + '</option>';
@@ -997,6 +1019,7 @@ const SCHOOL_JS = String.raw`
         } else if (activeTab === "reports") {
           var r = await api("/api/ms/admin/reports");
           main.innerHTML =
+            adminBackHtml() +
             '<div class="section-title">⚠️ غایبین / حاضر نشده‌های امروز</div>' +
             '<div class="card">' +
               ((r.absenceToday || []).length
@@ -1042,7 +1065,7 @@ const SCHOOL_JS = String.raw`
               '<button class="btn" onclick="changeAdminPass()">🔄 تغییر رمز</button>' +
             '</div>' +
             '<div style="text-align:center;margin:12px 0;">' +
-              '<button class="btn btn-ghost btn-sm" onclick="activeTab=\'home\';renderApp()">🔙 بازگشت به داشبورد</button>' +
+              '<button class="btn btn-ghost btn-sm" onclick="goTab(\'admin\')">🔙 بازگشت به مدیریت مدرسه</button>' +
             '</div>';
         } else if (activeTab === "announce") {
           renderAnnounceForm(main);
@@ -1398,6 +1421,35 @@ const SCHOOL_JS = String.raw`
         '<button class="btn btn-ghost btn-sm" onclick="activeTab=\'home\';renderApp()">🔙 بازگشت به خانه</button></div>';
     }
 
+    function adminBackHtml() {
+      return '<div style="text-align:center;margin:12px 0;"><button class="btn btn-ghost btn-sm" onclick="goTab(\'admin\')">🔙 بازگشت به مدیریت مدرسه</button></div>';
+    }
+
+    // ===== بازخوردهای آماده معلم (کلیکی) =====
+    var FB_PRESETS = [
+      "آفرین، عالی بود! 👏",
+      "خوب پیش رفتی، ادامه بده 💪",
+      "قابل قبول 👍",
+      "مرتب‌تر بنویس ✍️",
+      "دقت بیشتری کن 🔍",
+      "کامل نیست؛ دوباره ارسال کن 🔄"
+    ];
+    function fbPreset(inputId, text) {
+      var el = document.getElementById(inputId);
+      if (!el) return;
+      var cur = String(el.value || "").replace(/\s+$/, "");
+      el.value = cur ? (cur.indexOf(text) >= 0 ? cur : cur + " " + text) : text;
+      try { el.focus(); } catch (e) {}
+    }
+    function fbPresetsHtml(inputId) {
+      return '<div style="display:flex;flex-wrap:wrap;gap:5px;margin-top:6px;align-items:center;">' +
+        '<span class="muted" style="font-size:10.5px;">⚡ بازخورد سریع:</span>' +
+        FB_PRESETS.map(function (t) {
+          return '<button type="button" class="btn btn-ghost btn-sm" style="font-size:11px;padding:4px 9px;border-radius:999px;" onclick="fbPreset(\'' + inputId + '\',\'' + t + '\')">' + t + '</button>';
+        }).join("") +
+        '</div>';
+    }
+
     function viewPhoto(src) {
       if (!src) return;
       var ov = document.getElementById("photoOverlay");
@@ -1590,6 +1642,7 @@ const SCHOOL_JS = String.raw`
                   '<input id="revFb_' + s.submissionId + '" class="input" placeholder="بازخورد معلم..." style="flex:1;min-width:150px;margin:0;" value="' + esc(s.feedback) + '" />' +
                   '<button class="btn btn-emerald btn-sm" onclick="saveReview(' + s.submissionId + ')">✅ ثبت</button>' +
                 '</div>' +
+                fbPresetsHtml("revFb_" + s.submissionId) +
               '</div>';
             }).join("") +
             backBtnHtml();
@@ -2219,7 +2272,7 @@ const SCHOOL_JS = String.raw`
                 '<input id="revScore_' + x.submissionId + '" class="input" type="number" step="0.25" dir="ltr" placeholder="نمره" style="width:95px;margin:0;" value="' + (x.score !== null ? x.score : "") + '" />' +
                 '<input id="revFb_' + x.submissionId + '" class="input" placeholder="بازخورد..." style="flex:1;min-width:140px;margin:0;" value="' + esc(x.feedback) + '" />' +
                 '<button class="btn btn-emerald btn-sm" onclick="saveReview(' + x.submissionId + ')">✅ ثبت نمره</button>' +
-              '</div></div>';
+              '</div>' + fbPresetsHtml("revFb_" + x.submissionId) + '</div>';
           }).join("");
         }
         var muddy = await api("/api/ms/teacher/muddy").catch(function () { return { muddy: [] }; });
@@ -2238,7 +2291,7 @@ const SCHOOL_JS = String.raw`
                 '<input id="fb_mission_' + m.id + '" class="input" placeholder="بازخورد (اختیاری)" style="flex:1;min-width:110px;margin:0;" />' +
                 '<button class="btn btn-emerald btn-sm" onclick="approveInbox(\'mission\',' + m.id + ',\'approve\')">✅</button>' +
                 '<button class="btn btn-rose btn-sm" onclick="approveInbox(\'mission\',' + m.id + ',\'reject\')">❌</button>' +
-              '</div></div>';
+              '</div>' + fbPresetsHtml("fb_mission_" + m.id) + '</div>';
           }).join("") : '<div class="card"><div class="muted">موردی در انتظار نیست.</div></div>') +
           '<div class="section-title">🧠 گزارش‌های کارگاه در انتظار تایید</div>' +
           ((d.labs || []).length ? d.labs.map(function (l) {
@@ -2251,7 +2304,7 @@ const SCHOOL_JS = String.raw`
                 '<input id="fb_lab_' + l.id + '" class="input" placeholder="بازخورد (اختیاری)" style="flex:1;min-width:110px;margin:0;" />' +
                 '<button class="btn btn-emerald btn-sm" onclick="approveInbox(\'lab\',' + l.id + ',\'approve\')">✅</button>' +
                 '<button class="btn btn-rose btn-sm" onclick="approveInbox(\'lab\',' + l.id + ',\'reject\')">❌</button>' +
-              '</div></div>';
+              '</div>' + fbPresetsHtml("fb_lab_" + l.id) + '</div>';
           }).join("") : '<div class="card"><div class="muted">موردی در انتظار نیست.</div></div>') +
           '<div class="section-title">🛒 درخواست‌های خرید فروشگاه جوایز</div>' +
           ((d.orders || []).length ? d.orders.map(function (o) {

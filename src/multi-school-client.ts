@@ -2497,14 +2497,23 @@ const SCHOOL_JS = String.raw`
       try {
         if (!msData) await ensureHome();
         resolveSelClass();
-        var d = await api("/api/ms/teacher/inbox");
-        var asg = await api("/api/ms/teacher/assignments?classId=" + selClassId);
+        var basicFetch = await Promise.all([
+          api("/api/ms/teacher/inbox"),
+          api("/api/ms/teacher/assignments?classId=" + selClassId),
+          api("/api/ms/teacher/muddy").catch(function () { return { muddy: [] }; }),
+        ]);
+        var d = basicFetch[0];
+        var asg = basicFetch[1];
+        var muddy = basicFetch[2];
         var subSections = "";
         var asgList = (asg.assignments || []).slice();
         asgList.push({ id: 0, title: "تکلیف آزاد ارسالی" });
+        var subsAll = await Promise.all(asgList.map(function (aa) {
+          return api("/api/ms/teacher/submissions?assignmentId=" + aa.id).catch(function () { return { submissions: [] }; });
+        }));
         for (var ai = 0; ai < asgList.length; ai++) {
           var a = asgList[ai];
-          var sd = await api("/api/ms/teacher/submissions?assignmentId=" + a.id).catch(function () { return { submissions: [] }; });
+          var sd = subsAll[ai] || { submissions: [] };
           var rows = (sd.submissions || []).filter(function (x) { return x.submitted && !x.reviewed; });
           if (!rows.length) continue;
           subSections += rows.map(function (x) {
@@ -2521,7 +2530,6 @@ const SCHOOL_JS = String.raw`
               '</div>' + fbPresetsHtml("revFb_" + x.submissionId) + '</div>';
           }).join("");
         }
-        var muddy = await api("/api/ms/teacher/muddy").catch(function () { return { muddy: [] }; });
         main.innerHTML =
           classSwitcherHtml() +
           '<div class="section-title">📝 تکالیف ارسالی دانش‌آموزان (مشاهده تصویر، متن و تصحیح)</div>' +

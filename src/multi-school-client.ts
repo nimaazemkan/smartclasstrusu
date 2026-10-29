@@ -1844,7 +1844,9 @@ const SCHOOL_JS = String.raw`
 
     function chatMsgsHtml() {
       if (!classChatData.messages || !classChatData.messages.length) {
-        return '<div class="muted" style="text-align:center;padding:18px;">هنوز پیامی در گفتگوی کلاس نیست — اولین نفر باشید! 💬</div>';
+        return classChatData.loaded
+          ? '<div class="muted" style="text-align:center;padding:18px;">هنوز پیامی در گفتگوی کلاس نیست — اولین نفر باشید! 💬</div>'
+          : '<div class="muted" style="text-align:center;padding:18px;">⏳ در حال دریافت پیام‌ها...</div>';
       }
       return classChatData.messages.map(function (m) {
         return '<div class="bubble ' + (m.mine ? "bubble-me" : "bubble-them") + '">' +
@@ -1862,6 +1864,7 @@ const SCHOOL_JS = String.raw`
       try {
         var d = await api("/api/ms/edu/chat" + (session.role !== "student" && selClassId ? "?classId=" + selClassId : ""));
         classChatData = d;
+        classChatData.loaded = true;
         var box = document.getElementById("chatMsgs");
         if (box) {
           box.innerHTML = chatMsgsHtml();
@@ -1886,9 +1889,9 @@ const SCHOOL_JS = String.raw`
           '<div class="card" style="padding:10px;">' +
             '<div class="muted" style="font-size:11px;margin-bottom:8px;">با هم‌کلاسی‌هایت گفتگو کن 🌟 — پیام‌های بی‌ادبانه توسط معلم حذف می‌شوند.</div>' +
             '<div id="chatMsgs" style="height:320px;overflow-y:auto;background:var(--surface-2);border-radius:12px;padding:10px;">' + chatMsgsHtml() + '</div>' +
-            '<div style="display:flex;gap:8px;margin-top:10px;">' +
-              '<input id="chatInput" class="input" style="flex:1;margin:0;" placeholder="پیامت را بنویس..." value="' + esc(classChatDraft) + '" oninput="chatInputChanged(this)" onkeydown="if(event.key===\'Enter\')sendChatMsg()" />' +
-              '<button class="btn btn-emerald" onclick="sendChatMsg()">📤</button>' +
+            '<div style="display:flex;gap:8px;margin-top:10px;align-items:center;">' +
+              '<input id="chatInput" class="input" style="flex:1 1 auto;width:auto;min-width:0;margin:0;" placeholder="پیامت را بنویس..." value="' + esc(classChatDraft) + '" oninput="chatInputChanged(this)" onkeydown="if(event.key===\'Enter\')sendChatMsg()" />' +
+              '<button class="btn btn-emerald" style="width:auto;flex:0 0 auto;padding:12px 22px;" onclick="sendChatMsg()">📤 ارسال</button>' +
             '</div>' +
           '</div>' +
           backBtnHtml();

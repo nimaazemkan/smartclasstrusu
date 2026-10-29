@@ -2757,7 +2757,7 @@ export async function handleMultiSchoolRequest(
             photo,
             hwScore > 0 ? hwScore : null,
             String(hw.feedback || ""),
-            String(hw.date || nowIso()),
+            hwScore > 0 ? String(hw.date || nowIso()) : "",
             String(hw.date || nowIso())
           )
           .run();

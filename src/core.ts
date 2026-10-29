@@ -2851,10 +2851,10 @@ async function sendRichAiAnswer(
 }
 
 // ==================== تبدیل ویس به متن (Groq Whisper) ====================
-async function voiceToText(env: Env, audioBuffer: ArrayBuffer, lang: "fa" | "en" = "fa"): Promise<string> {
+async function voiceToText(env: Env, audioBuffer: ArrayBuffer, lang: "fa" | "en" = "fa", mime = "audio/ogg", fname = "voice.ogg"): Promise<string> {
   try {
     const formData = new FormData();
-    formData.append("file", new Blob([audioBuffer], { type: "audio/ogg" }), "voice.ogg");
+    formData.append("file", new Blob([audioBuffer], { type: mime }), fname);
     formData.append("model", "whisper-large-v3-turbo");
     formData.append("language", lang);
 
@@ -2870,6 +2870,21 @@ async function voiceToText(env: Env, audioBuffer: ArrayBuffer, lang: "fa" | "en"
     return data.text || "";
   } catch (e: any) {
     console.error("Voice Error:", e);
+    return "";
+  }
+}
+
+// ==================== تبدیل داده‌ی صوتی (data URL) به متن ====================
+async function dataUrlToTranscript(env: Env, dataUrl: string): Promise<string> {
+  try {
+    const m = /^data:([^;,]+)[^,]*;base64,(.*)$/s.exec(String(dataUrl || ""));
+    if (!m) return "";
+    const bin = atob(m[2]);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    const mime = m[1] || "audio/webm";
+    return await voiceToText(env, bytes.buffer as ArrayBuffer, "fa", mime, mime.indexOf("ogg") >= 0 ? "voice.ogg" : "voice.webm");
+  } catch {
     return "";
   }
 }
@@ -10899,6 +10914,7 @@ async function handleAppRequest(
       verifyToken,
       normalizeDigits: core.normalizeDigits,
       askAI: async (question) => await core.askAI(env, question),
+      transcribeAudio: async (audioDataUrl: string) => await dataUrlToTranscript(env, audioDataUrl),
       generateQuiz: async (topic, count) => await generateMultipleQuizzesWithAI(env, topic, count),
       aiTool: async (tool, p) => {
         try {
@@ -12096,6 +12112,7 @@ export default {
         const handled = await handleMsTgUpdate(upd, env.telegram_bot_db, {
           defaultBotToken: BOT_TOKEN,
           normalizeDigits,
+          transcribeAudio: async (audioDataUrl: string) => await dataUrlToTranscript(env, audioDataUrl),
         } as any);
         if (handled) return new Response("ok");
       } catch (e) {}

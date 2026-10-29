@@ -612,6 +612,7 @@ const SCHOOL_JS = String.raw`
                 '<button class="menu-item" onclick="activeTab=\'shop\';renderApp()"><span>🛒</span>فروشگاه جوایز</button>' +
                 '<button class="menu-item" onclick="activeTab=\'library\';renderApp()"><span>📂</span>کتابخانه</button>' +
                 '<button class="menu-item" onclick="activeTab=\'msg\';renderApp()"><span>💬</span>پیام به معلم</button>' +
+                '<button class="menu-item" onclick="activeTab=\'classchat\';renderApp()"><span>💬</span>گفتگوی کلاس</button>' +
                 '<button class="menu-item" onclick="activeTab=\'history\';renderApp()"><span>📜</span>سوابق من</button>' +
                 '<button class="menu-item" onclick="activeTab=\'announce\';renderApp()"><span>📢</span>اطلاعیه‌ها</button>' +
                 '<button class="menu-item" onclick="activeTab=\'muddy\';renderApp()"><span>🆘</span>مباحث گنگ</button>' +
@@ -687,6 +688,9 @@ const SCHOOL_JS = String.raw`
           return;
         } else if (activeTab === "muddy") {
           await renderMuddy(main);
+          return;
+        } else if (activeTab === "classchat") {
+          renderClassChat(main);
           return;
         } else if (activeTab === "ai") {
           renderAiPanel(main);
@@ -774,6 +778,9 @@ const SCHOOL_JS = String.raw`
           return;
         } else if (activeTab === "ai" || activeTab === "ait" || activeTab === "lab" || activeTab === "labtool") {
           await renderLab(main);
+          return;
+        } else if (activeTab === "classchat") {
+          await renderClassChat(main);
           return;
         } else if (activeTab === "pchat" || activeTab === "msgm") {
           await renderMsgM(main);
@@ -1413,6 +1420,8 @@ const SCHOOL_JS = String.raw`
     // ==================== 📚 تکالیف + 🤖 هوش مصنوعی + 📝 کوییز ====================
     var hwView = { assignmentId: -1 };
     var hwPhotos = {};
+    var hwVideos = {};
+    var hwFreeVideo = "";
     var aiHistory = [];
     var quizState = { topic: "", questions: [], answers: [] };
 
@@ -1503,6 +1512,9 @@ const SCHOOL_JS = String.raw`
               '<textarea id="hwFreeText" class="input" rows="3" placeholder="متن تکلیف یا توضیح..." style="margin-top:10px;"></textarea>' +
               '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:8px;">' +
                 '<label class="btn btn-ghost btn-sm" style="cursor:pointer;">📷 انتخاب عکس<input type="file" accept="image/*" style="display:none;" onchange="pickHwFreePhoto(this)" /></label>' +
+                '<label class="btn btn-ghost btn-sm" style="cursor:pointer;">📁 ویدیو<input type="file" accept="video/*" style="display:none;" onchange="pickHwFreeVideo(this)" /></label>' +
+                '<button type="button" class="btn btn-ghost btn-sm" onclick="recordHwFreeVideo()">🎥 ضبط ویدیو</button>' +
+                '<video id="hwFreeVidPrev" controls style="display:none;max-width:100%;max-height:150px;border-radius:9px;"></video>' +
                 '<img id="hwFreePrev" src="" style="display:none;width:64px;height:64px;object-fit:cover;border-radius:9px;border:1px solid var(--border);cursor:pointer;" onclick="viewPhoto(this.src)" />' +
                 '<button class="btn btn-emerald btn-sm" style="margin-right:auto;" onclick="submitFreeHw()">📤 ارسال به معلم</button>' +
               '</div>' +
@@ -1517,6 +1529,7 @@ const SCHOOL_JS = String.raw`
                   : '<div style="padding:7px 10px;border-radius:10px;background:rgba(245,158,11,0.12);border:1px solid rgba(245,158,11,0.4);margin-bottom:7px;">⏳ منتظر بررسی معلم</div>') +
                 (x.text ? '<div style="padding:8px 10px;background:var(--surface-2);border-radius:11px;font-size:12.5px;">' + esc(x.text) + '</div>' : '') +
                 (x.photo ? '<img src="' + x.photo + '" style="width:100%;max-height:220px;object-fit:contain;border-radius:11px;cursor:pointer;margin:6px 0;" onclick="viewPhoto(this.src)" />' : '') +
+                (x.video ? '<video src="' + x.video + '" controls style="width:100%;max-height:220px;border-radius:11px;margin:6px 0;"></video>' : '') +
                 '<div class="muted" style="font-size:11px;">🗓 ' + esc(x.createdAt) + '</div>' +
               '</div>';
             }).join("")
@@ -1542,14 +1555,18 @@ const SCHOOL_JS = String.raw`
                   '<textarea id="hwText_' + a.id + '" class="input" rows="3" placeholder="متن تکلیف یا جواب سوالات...">' + esc(sub ? sub.text : "") + '</textarea>' +
                   '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">' +
                     '<label class="btn btn-ghost btn-sm" style="cursor:pointer;">📷 انتخاب عکس<input type="file" accept="image/*" style="display:none;" onchange="pickHwPhoto(' + a.id + ', this)" /></label>' +
+                    '<label class="btn btn-ghost btn-sm" style="cursor:pointer;">📁 ویدیو<input type="file" accept="video/*" style="display:none;" onchange="pickHwVideo(' + a.id + ', this)" /></label>' +
+                    '<button type="button" class="btn btn-ghost btn-sm" onclick="recordHwVideo(' + a.id + ')">🎥 ضبط ویدیو</button>' +
+                    '<video id="hwVidPrev_' + a.id + '" controls src="' + (sub && sub.video ? sub.video : "") + '" style="display:' + (sub && sub.video ? "inline-block" : "none") + ';max-width:100%;max-height:150px;border-radius:9px;"></video>' +
                     '<img id="hwPrev_' + a.id + '" src="" style="display:' + (sub && sub.photo ? "inline-block" : "none") + ';width:64px;height:64px;object-fit:cover;border-radius:9px;border:1px solid var(--border);cursor:pointer;" onclick="viewPhoto(this.src)" />' +
                     '<button class="btn btn-emerald btn-sm" style="margin-right:auto;" onclick="submitHw(' + a.id + ')">📤 ' + (sub ? "ویرایش ارسال" : "ارسال تکلیف") + '</button>' +
                   '</div>';
                 if (sub && sub.photo) {
                   formHtml = formHtml.replace('src=""', 'src="' + sub.photo + '"');
                 }
-              } else if (sub && sub.photo) {
-                formHtml = '<img src="' + sub.photo + '" style="width:100%;max-height:220px;object-fit:contain;border-radius:11px;cursor:pointer;" onclick="viewPhoto(this.src)" />';
+              } else if (sub && (sub.photo || sub.video)) {
+                formHtml = (sub.photo ? '<img src="' + sub.photo + '" style="width:100%;max-height:220px;object-fit:contain;border-radius:11px;cursor:pointer;" onclick="viewPhoto(this.src)" />' : "") +
+                  (sub.video ? '<video src="' + sub.video + '" controls style="width:100%;max-height:220px;border-radius:11px;margin:6px 0;"></video>' : "");
               }
               return '<div class="card">' +
                 '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">' +
@@ -1598,9 +1615,10 @@ const SCHOOL_JS = String.raw`
     async function submitFreeHw() {
       try {
         var txt = (document.getElementById("hwFreeText") || {}).value || "";
-        if (!txt.trim() && !hwFreePhoto) return showToast("متن یا عکس تکلیف را وارد کنید");
-        await api("/api/ms/student/hw/send", { text: txt.trim(), photo: hwFreePhoto });
+        if (!txt.trim() && !hwFreePhoto && !hwFreeVideo) return showToast("متن یا عکس یا ویدیوی تکلیف را وارد کنید");
+        await api("/api/ms/student/hw/send", { text: txt.trim(), photo: hwFreePhoto, video: hwFreeVideo });
         hwFreePhoto = "";
+        hwFreeVideo = "";
         showToast("✅ تکلیف برای معلم ارسال شد");
         renderApp();
       } catch (e) { showToast("❌ " + e.message); }
@@ -1609,11 +1627,104 @@ const SCHOOL_JS = String.raw`
     async function submitHw(aid) {
       try {
         var txt = (document.getElementById("hwText_" + aid) || {}).value || "";
-        await api("/api/ms/student/submit", { assignmentId: aid, text: txt.trim(), photo: hwPhotos[aid] || "" });
+        await api("/api/ms/student/submit", { assignmentId: aid, text: txt.trim(), photo: hwPhotos[aid] || "", video: hwVideos[aid] || "" });
         hwPhotos[aid] = "";
+        hwVideos[aid] = "";
         showToast("✅ تکلیف ارسال شد.");
         renderApp();
       } catch (e) { showToast("❌ " + e.message); }
+    }
+
+    function readVideoFile(input, maxLen, cb) {
+      var f = input.files && input.files[0];
+      if (!f) return;
+      if (f.size > 2300000) {
+        showToast("حجم ویدیو زیاد است (حداکثر ۲ مگابایت) — ویدیوی کوتاه‌تری بفرستید");
+        input.value = "";
+        return;
+      }
+      var reader = new FileReader();
+      reader.onload = function () {
+        var r = String(reader.result || "");
+        if (r.length > maxLen) { showToast("حجم ویدیو زیاد است (حداکثر ۲ مگابایت)"); return; }
+        cb(r);
+      };
+      reader.readAsDataURL(f);
+    }
+
+    function pickHwFreeVideo(input) {
+      readVideoFile(input, 2700000, function (data) {
+        hwFreeVideo = data;
+        var pv = document.getElementById("hwFreeVidPrev");
+        if (pv) { pv.src = data; pv.style.display = "inline-block"; }
+        showToast("🎥 ویدیو آماده ارسال است");
+      });
+    }
+
+    function pickHwVideo(aid, input) {
+      readVideoFile(input, 2700000, function (data) {
+        hwVideos[aid] = data;
+        var pv = document.getElementById("hwVidPrev_" + aid);
+        if (pv) { pv.src = data; pv.style.display = "inline-block"; }
+        showToast("🎥 ویدیو آماده ارسال است");
+      });
+    }
+
+    function recordVideoClip(cb) {
+      try {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return showToast("ضبط ویدیو در این دستگاه پشتیبانی نمی‌شود");
+        navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment", width: { ideal: 640 } }, audio: true }).then(function (stream) {
+          var chunks = [];
+          var mime = "";
+          if (typeof MediaRecorder !== "undefined") {
+            if (MediaRecorder.isTypeSupported("video/webm;codecs=vp8,opus")) mime = "video/webm;codecs=vp8,opus";
+            else if (MediaRecorder.isTypeSupported("video/webm")) mime = "video/webm";
+          }
+          var rec = new MediaRecorder(stream, mime ? { mimeType: mime, videoBitsPerSecond: 350000, audioBitsPerSecond: 48000 } : undefined);
+          var stopped = false;
+          var stopAll = function () {
+            if (stopped) return;
+            stopped = true;
+            try { rec.stop(); } catch (e) {}
+            stream.getTracks().forEach(function (t) { t.stop(); });
+          };
+          setTimeout(stopAll, 45000);
+          rec.ondataavailable = function (e) { if (e.data && e.data.size) chunks.push(e.data); };
+          rec.onstop = function () {
+            stream.getTracks().forEach(function (t) { t.stop(); });
+            window._recStop = null;
+            var blob = new Blob(chunks, { type: mime || "video/webm" });
+            if (!blob.size) return showToast("ویدیویی ضبط نشد");
+            if (blob.size > 2300000) return showToast("ویدیوی ضبط‌شده طولانی شد — کوتاه‌تر ضبط کنید");
+            var reader = new FileReader();
+            reader.onload = function () { cb(String(reader.result || "")); };
+            reader.readAsDataURL(blob);
+          };
+          rec.start();
+          window._recStop = stopAll;
+          showToast("🔴 در حال ضبط ویدیو... (حداکثر ۴۵ ثانیه — برای پایان، دوباره همین دکمه را بزنید)");
+        }).catch(function () { showToast("دسترسی به دوربین داده نشد"); });
+      } catch (e) { showToast("❌ " + e.message); }
+    }
+
+    function recordHwFreeVideo() {
+      if (window._recStop) { window._recStop(); return; }
+      recordVideoClip(function (data) {
+        hwFreeVideo = data;
+        var pv = document.getElementById("hwFreeVidPrev");
+        if (pv) { pv.src = data; pv.style.display = "inline-block"; }
+        showToast("🎥 ویدیو آماده ارسال است");
+      });
+    }
+
+    function recordHwVideo(aid) {
+      if (window._recStop) { window._recStop(); return; }
+      recordVideoClip(function (data) {
+        hwVideos[aid] = data;
+        var pv = document.getElementById("hwVidPrev_" + aid);
+        if (pv) { pv.src = data; pv.style.display = "inline-block"; }
+        showToast("🎥 ویدیو آماده ارسال است");
+      });
     }
 
     async function renderTeacherHw(main) {
@@ -1637,6 +1748,7 @@ const SCHOOL_JS = String.raw`
                 (s.reviewed ? ' <span class="badge-pill" style="background:rgba(16,185,129,0.2);color:#6EE7B7;">تصحیح شد</span>' : '') +
                 (s.text ? '<div style="margin:7px 0;padding:9px 11px;background:var(--surface-2);border-radius:11px;font-size:13px;">' + esc(s.text) + '</div>' : '') +
                 (s.photo ? '<img src="' + s.photo + '" style="width:100%;max-height:230px;object-fit:contain;border-radius:11px;cursor:pointer;margin:6px 0;" onclick="viewPhoto(this.src)" />' : '') +
+                (s.video ? '<video src="' + s.video + '" controls style="width:100%;max-height:260px;border-radius:11px;margin:6px 0;"></video>' : '') +
                 '<div style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap;">' +
                   '<input id="revScore_' + s.submissionId + '" class="input" type="number" step="0.25" dir="ltr" placeholder="نمره" style="width:95px;margin:0;" value="' + (s.score !== null ? s.score : "") + '" />' +
                   '<input id="revFb_' + s.submissionId + '" class="input" placeholder="بازخورد معلم..." style="flex:1;min-width:150px;margin:0;" value="' + esc(s.feedback) + '" />' +
@@ -1723,6 +1835,89 @@ const SCHOOL_JS = String.raw`
     }
 
     // ---- 🤖 پرسش و پاسخ هوشمند ----
+    // ==================== 💬 گفتگوی کلاس ====================
+    var classChatTimer = null;
+    var classChatDraft = "";
+    var classChatData = { classId: 0, messages: [] };
+
+    function chatInputChanged(el) { classChatDraft = el.value || ""; }
+
+    function chatMsgsHtml() {
+      if (!classChatData.messages || !classChatData.messages.length) {
+        return '<div class="muted" style="text-align:center;padding:18px;">هنوز پیامی در گفتگوی کلاس نیست — اولین نفر باشید! 💬</div>';
+      }
+      return classChatData.messages.map(function (m) {
+        return '<div class="bubble ' + (m.mine ? "bubble-me" : "bubble-them") + '">' +
+          (!m.mine ? '<div style="font-size:10.5px;opacity:.75;margin-bottom:3px;">' + esc(m.name) + (m.role === "teacher" ? " 👨‍🏫" : m.role === "admin" ? " 🏫" : "") + '</div>' : "") +
+          '<div style="white-space:pre-wrap;">' + esc(m.text) + '</div>' +
+          '<div style="font-size:9.5px;opacity:.65;margin-top:3px;">' + esc(m.date) + '</div>' +
+          (session.role === "teacher" || session.role === "admin"
+            ? '<button class="btn btn-ghost btn-sm" style="font-size:9.5px;padding:2px 7px;margin-top:4px;" onclick="delChatMsg(' + m.id + ')">🗑 حذف</button>'
+            : "") +
+        '</div>';
+      }).join("");
+    }
+
+    async function refreshClassChat() {
+      try {
+        var d = await api("/api/ms/edu/chat" + (session.role !== "student" && selClassId ? "?classId=" + selClassId : ""));
+        classChatData = d;
+        var box = document.getElementById("chatMsgs");
+        if (box) {
+          box.innerHTML = chatMsgsHtml();
+          box.scrollTop = box.scrollHeight;
+        }
+      } catch (e) {}
+    }
+
+    async function renderClassChat(main) {
+      try {
+        if (!msData) await ensureHome();
+        if (session.role !== "student") resolveSelClass();
+        if (!classChatTimer) {
+          classChatTimer = setInterval(function () {
+            if (activeTab !== "classchat") { clearInterval(classChatTimer); classChatTimer = null; return; }
+            refreshClassChat();
+          }, 4000);
+        }
+        main.innerHTML =
+          (session.role !== "student" ? classSwitcherHtml() : "") +
+          '<div class="section-title">💬 گفتگوی کلاس' + (session.role === "student" && msData && msData.class && msData.class.label ? " — " + esc(msData.class.label) : "") + '</div>' +
+          '<div class="card" style="padding:10px;">' +
+            '<div class="muted" style="font-size:11px;margin-bottom:8px;">با هم‌کلاسی‌هایت گفتگو کن 🌟 — پیام‌های بی‌ادبانه توسط معلم حذف می‌شوند.</div>' +
+            '<div id="chatMsgs" style="height:320px;overflow-y:auto;background:var(--surface-2);border-radius:12px;padding:10px;">' + chatMsgsHtml() + '</div>' +
+            '<div style="display:flex;gap:8px;margin-top:10px;">' +
+              '<input id="chatInput" class="input" style="flex:1;margin:0;" placeholder="پیامت را بنویس..." value="' + esc(classChatDraft) + '" oninput="chatInputChanged(this)" onkeydown="if(event.key===\'Enter\')sendChatMsg()" />' +
+              '<button class="btn btn-emerald" onclick="sendChatMsg()">📤</button>' +
+            '</div>' +
+          '</div>' +
+          backBtnHtml();
+        await refreshClassChat();
+      } catch (e) {
+        main.innerHTML = '<div class="card">❌ ' + esc(e.message) + '</div>';
+      }
+    }
+
+    async function sendChatMsg() {
+      var el = document.getElementById("chatInput");
+      var txt = (el ? el.value : classChatDraft || "").trim();
+      if (!txt) return showToast("متن پیام را بنویسید");
+      try {
+        await api("/api/ms/edu/chat", { classId: classChatData.classId || Number(session.classId || 0), text: txt });
+        classChatDraft = "";
+        if (el) el.value = "";
+        await refreshClassChat();
+      } catch (e) { showToast("❌ " + e.message); }
+    }
+
+    async function delChatMsg(id) {
+      if (!confirm("این پیام حذف شود؟")) return;
+      try {
+        await api("/api/ms/edu/chat/delete", { id: id });
+        await refreshClassChat();
+      } catch (e) { showToast("❌ " + e.message); }
+    }
+
     function renderAiPanel(main) {
       main.innerHTML =
         '<div class="section-title">🤖 پرسش و پاسخ هوشمند</div>' +
@@ -1738,6 +1933,10 @@ const SCHOOL_JS = String.raw`
               }).join("")
             : "") +
           '<textarea id="aiQ" class="input" rows="3" placeholder="سوالتان را بنویسید... (مثلاً: علت رنگین کمان چیست؟)"></textarea>' +
+          '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">' +
+            '<button class="btn btn-gold" onclick="toggleAiVoice()">🎤 گفتن سوال با صدا</button>' +
+            '<span class="muted" id="micState" style="font-size:11.5px;"></span>' +
+          '</div>' +
           '<button class="btn" onclick="askAiNow()">✨ پرسیدن از هوش مصنوعی</button>' +
         '</div>' +
         backBtnHtml();
@@ -1756,6 +1955,49 @@ const SCHOOL_JS = String.raw`
         aiHistory[aiHistory.length - 1] = { q: q, a: "❌ " + e.message, photo: "" };
       }
       renderApp();
+    }
+
+    var aiRec = null;
+    var aiRecChunks = [];
+    async function toggleAiVoice() {
+      if (aiRec && aiRec.state === "recording") {
+        try { aiRec.stop(); } catch (e) {}
+        return;
+      }
+      if (typeof MediaRecorder === "undefined") return showToast("ضبط صدا در این دستگاه پشتیبانی نمی‌شود");
+      try {
+        var stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        aiRecChunks = [];
+        var mime = MediaRecorder.isTypeSupported("audio/webm;codecs=opus") ? "audio/webm;codecs=opus" : "";
+        aiRec = new MediaRecorder(stream, mime ? { mimeType: mime, audioBitsPerSecond: 24000 } : undefined);
+        aiRec.ondataavailable = function (e) { if (e.data && e.data.size) aiRecChunks.push(e.data); };
+        aiRec.onstop = function () {
+          stream.getTracks().forEach(function (t) { t.stop(); });
+          aiRec = null;
+          var blob = new Blob(aiRecChunks, { type: "audio/webm" });
+          var st = document.getElementById("micState");
+          if (!blob.size) { if (st) st.textContent = ""; return; }
+          if (blob.size > 1400000) { if (st) st.textContent = ""; return showToast("صدای ضبط‌شده خیلی طولانی است (حداکثر ۹۰ ثانیه)"); }
+          if (st) st.textContent = "⏳ در حال تبدیل صدا به متن...";
+          var reader = new FileReader();
+          reader.onload = function () {
+            api("/api/ms/edu/ai/voice", { audio: String(reader.result || "") }).then(function (r) {
+              var q = document.getElementById("aiQ");
+              if (q) q.value = ((q.value || "") + " " + (r.text || "")).trim();
+              if (st) st.textContent = "✅ متن آماده شد — دکمه پرسیدن را بزنید";
+            }).catch(function (e) {
+              if (st) st.textContent = "";
+              showToast("❌ " + e.message);
+            });
+          };
+          reader.readAsDataURL(blob);
+        };
+        aiRec.start();
+        var st2 = document.getElementById("micState");
+        if (st2) st2.textContent = "🔴 در حال ضبط... (برای پایان، دوباره بزنید)";
+      } catch (e) {
+        showToast("دسترسی به میکروفون داده نشد");
+      }
     }
 
     // ---- 📝 کوییز هوشمند ----
@@ -2268,6 +2510,7 @@ const SCHOOL_JS = String.raw`
               (x.reviewed ? ' <span class="badge-pill" style="background:rgba(16,185,129,0.2);color:#6EE7B7;">تصحیح شد</span>' : ' <span class="badge-pill" style="background:rgba(245,158,11,0.2);color:#FCD34D;">در انتظار تصحیح</span>') +
               (x.text ? '<div style="margin:7px 0;padding:9px 11px;background:var(--surface-2);border-radius:11px;font-size:12.5px;">' + esc(x.text) + '</div>' : '') +
               (x.photo ? '<img src="' + x.photo + '" style="width:100%;max-height:220px;object-fit:contain;border-radius:11px;cursor:pointer;margin:6px 0;" onclick="viewPhoto(this.src)" />' : '') +
+              (x.video ? '<video src="' + x.video + '" controls style="width:100%;max-height:220px;border-radius:11px;margin:6px 0;"></video>' : '') +
               '<div style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap;">' +
                 '<input id="revScore_' + x.submissionId + '" class="input" type="number" step="0.25" dir="ltr" placeholder="نمره" style="width:95px;margin:0;" value="' + (x.score !== null ? x.score : "") + '" />' +
                 '<input id="revFb_' + x.submissionId + '" class="input" placeholder="بازخورد..." style="flex:1;min-width:140px;margin:0;" value="' + esc(x.feedback) + '" />' +
@@ -2471,7 +2714,7 @@ const SCHOOL_JS = String.raw`
         if (!d) { main.innerHTML = classSwitcherHtml(); return; }
         var present = (d.roster || []).filter(function (x) { return x.todayStatus === "present"; }).length;
         var inbox = await api("/api/ms/teacher/inbox").catch(function () { return { missions: [], labs: [], orders: [] }; });
-        var pendCount = (inbox.missions || []).length + (inbox.labs || []).length + (inbox.orders || []).length;
+        var pendCount = (inbox.missions || []).length + (inbox.labs || []).length + (inbox.orders || []).length + Number(inbox.pendingSubs || 0);
         main.innerHTML =
           classSwitcherHtml() +
           '<div class="card hero-card">' +
@@ -2504,6 +2747,7 @@ const SCHOOL_JS = String.raw`
               '<button class="menu-item" onclick="goTab(\'ai\')"><span>🤖</span>ابزار هوش مصنوعی</button>' +
               '<button class="menu-item" onclick="goTab(\'class\')"><span>🏆</span>کلاس و کدها</button>' +
               '<button class="menu-item" onclick="goTab(\'pchat\')"><span>💬</span>پیام اولیا</button>' +
+              '<button class="menu-item" onclick="activeTab=\'classchat\';renderApp()"><span>💬</span>گفتگوی کلاس</button>' +
               '<button class="menu-item" onclick="activeTab=\'shopm\';renderApp()"><span>🛒</span>فروشگاه جوایز</button>' +
               '<button class="menu-item" onclick="activeTab=\'libm\';renderApp()"><span>📂</span>کتابخانه</button>' +
               '<button class="menu-item" onclick="activeTab=\'deadlines\';renderApp()"><span>⏰</span>ددلاین و امتحان</button>' +
@@ -2513,6 +2757,18 @@ const SCHOOL_JS = String.raw`
                 '<button class="menu-item" onclick="goTab(\'admin\')"><span>🏫</span>مدیریت مدرسه</button></div>'
               : "") +
           '</div>' +
+          '<div class="section-title">📚 تکالیف در انتظار تصحیح (' + Number(inbox.pendingSubs || 0) + ')</div>' +
+          ((inbox.recentSubs || []).length
+            ? '<div class="card">' +
+                inbox.recentSubs.map(function (x) {
+                  return '<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border);">' +
+                    '<b style="flex:1;">' + esc(x.name) + '</b>' +
+                    '<span class="muted" style="font-size:11px;">' + (x.hasVideo ? '🎥' : x.hasPhoto ? '📷' : '✍️') + ' ' + esc(x.text) + '</span>' +
+                  '</div>';
+                }).join("") +
+                '<button class="btn btn-sm" style="margin-top:8px;width:100%;" onclick="goTab(\'inbox\')">📥 رفتن به صندوق تایید</button>' +
+              '</div>'
+            : '<div class="card"><div class="muted">تکلیف جدیدی در انتظار نیست ✅</div></div>') +
           '<div class="section-title">📢 اطلاعیه‌های اخیر</div>' +
           ((msData.announcements || []).length
             ? msData.announcements.slice(0, 5).map(function (a) {

@@ -522,6 +522,36 @@ export async function msTgNotifyTeachersMapped(db: D1Database, deps: any, school
   }
 }
 
+// ===== همگام‌سازی امتیاز سامانه‌ی جدید با نمایش ربات تلگرام (جدول قدیمی students.score) =====
+const MS_LEGACY_LEVELS = [0, 10, 25, 50, 100, 200, 400];
+export async function msSyncLegacyScore(db: D1Database, studentId: number, delta: number): Promise<void> {
+  try {
+    if (!delta) return;
+    const st: any = await db.prepare("SELECT name, tg_id FROM ms_students WHERE id = ?").bind(studentId).first();
+    if (!st) return;
+    let legUserId = "";
+    if (String(st.tg_id || "")) {
+      const leg: any = await db.prepare("SELECT user_id FROM students WHERE user_id = ?").bind(String(st.tg_id)).first();
+      if (leg) legUserId = String(leg.user_id);
+    }
+    if (!legUserId) {
+      const norm = (x: string) => String(x || "").replace(/[\u200c\u200d\u200e\u200f]/g, "").replace(/\s+/g, "").trim();
+      const rows = ((await db.prepare("SELECT user_id, name FROM students").all()).results || []) as any[];
+      const hit = rows.find((r: any) => norm(r.name) === norm(st.name));
+      if (hit) legUserId = String(hit.user_id);
+    }
+    if (!legUserId) return;
+    await db.prepare("UPDATE students SET score = max(0, COALESCE(score,0) + ?) WHERE user_id = ?").bind(delta, legUserId).run();
+    const row: any = await db.prepare("SELECT score FROM students WHERE user_id = ?").bind(legUserId).first();
+    const sc = Number(row?.score || 0);
+    let lvl = 1;
+    for (let i = 0; i < MS_LEGACY_LEVELS.length; i++) if (sc >= MS_LEGACY_LEVELS[i]) lvl = i + 1;
+    await db.prepare("UPDATE students SET level = ? WHERE user_id = ?").bind(lvl, legUserId).run();
+  } catch {
+    /* جدول قدیمی ممکن است وجود نداشته باشد */
+  }
+}
+
 export async function msBirthdayGreetings(db: D1Database, deps: any, schoolId: number): Promise<void> {
   try {
     const today = todayStr();
@@ -608,6 +638,7 @@ export async function handleMsTgUpdate(update: any, db: D1Database, deps: any): 
             .prepare("INSERT INTO ms_points (school_id, class_id, student_id, delta, reason, created_by, created_at) VALUES (?, (SELECT class_id FROM ms_students WHERE id = ?), ?, ?, ?, ?, ?)")
             .bind(schoolId, sid, sid, pts, reason, "معلم (تلگرام)", nowIso())
             .run();
+          await msSyncLegacyScore(db, sid, pts);
         }
       };
       let done = false;
@@ -639,6 +670,7 @@ export async function handleMsTgUpdate(update: any, db: D1Database, deps: any): 
               .prepare("INSERT INTO ms_points (school_id, class_id, student_id, delta, reason, created_by, created_at) VALUES (?, (SELECT class_id FROM ms_students WHERE id = ?), ?, ?, ?, ?, ?)")
               .bind(schoolId, Number(o.student_id), Number(o.student_id), -cost, "خرید جایزه: " + (item?.title || ""), "معلم (تلگرام)", nowIso())
               .run();
+            await msSyncLegacyScore(db, Number(o.student_id), -cost);
           } else {
             await db.prepare("UPDATE ms_shop_orders SET status = 'rejected' WHERE id = ?").bind(id).run();
           }
@@ -2121,6 +2153,7 @@ export async function handleMultiSchoolRequest(
         .prepare("INSERT INTO ms_points (school_id, class_id, student_id, delta, reason, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
         .bind(schoolId, Number(st.class_id), sid, delta, String(body.reason || "").trim(), schoolRow.admin_name || "مدیر مدرسه", nowIso())
         .run();
+      await msSyncLegacyScore(db, sid, delta);
       return jsonOut({ ok: true });
     }
 
@@ -3235,6 +3268,7 @@ export async function handleMultiSchoolRequest(
           .prepare("INSERT INTO ms_points (school_id, class_id, student_id, delta, reason, created_by, created_at) VALUES (?, (SELECT class_id FROM ms_students WHERE id = ?), ?, ?, ?, ?, ?)")
           .bind(schoolId, sid, sid, pts, reason, "معلم", nowIso())
           .run();
+        await msSyncLegacyScore(db, sid, pts);
       }
     };
     if (kind === "mission") {
@@ -3270,6 +3304,7 @@ export async function handleMultiSchoolRequest(
           .prepare("INSERT INTO ms_points (school_id, class_id, student_id, delta, reason, created_by, created_at) VALUES (?, (SELECT class_id FROM ms_students WHERE id = ?), ?, ?, ?, ?, ?)")
           .bind(schoolId, Number(o.student_id), Number(o.student_id), -cost, `خرید جایزه: ${item?.title || ""}`, "فروشگاه", nowIso())
           .run();
+        await msSyncLegacyScore(db, Number(o.student_id), -cost);
       } else {
         await db.prepare("UPDATE ms_shop_orders SET status = 'rejected' WHERE id = ?").bind(id).run();
       }
@@ -3290,6 +3325,17 @@ export async function handleMultiSchoolRequest(
       .prepare("INSERT INTO ms_points (school_id, class_id, student_id, delta, reason, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
       .bind(schoolId, Number(st.class_id), sid, delta, String(body.reason || "").trim() || "امتیاز معلم", "معلم", nowIso())
       .run();
+    await msSyncLegacyScore(db, sid, delta);
+    const rTxt = String(body.reason || "").trim();
+    await msTgNotifyStudent(
+      db,
+      deps,
+      schoolId,
+      sid,
+      delta > 0
+        ? "⭐ " + delta + " امتیاز از طرف معلم دریافت کردی! 🎉" + (rTxt ? "\n💬 " + rTxt : "")
+        : "🔻 " + Math.abs(delta) + " امتیاز از امتیازت کسر شد." + (rTxt ? "\n💬 " + rTxt : "")
+    );
     return jsonOut({ ok: true });
   }
 

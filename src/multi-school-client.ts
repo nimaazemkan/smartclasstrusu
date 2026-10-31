@@ -2855,7 +2855,7 @@ const SCHOOL_JS = String.raw`
     async function setPoints(studentId, delta, reason) {
       try {
         await api("/api/ms/teacher/points", { studentId: studentId, delta: delta, reason: reason || "" });
-        showToast(delta > 0 ? "⭐ +" + delta + " امتیاز ثبت شد" : "🔻 " + delta + " امتیاز ثبت شد");
+        showToast((delta > 0 ? "⭐ +" + delta + " امتیاز ثبت شد" : "🔻 " + delta + " امتیاز ثبت شد") + " — 📲 در تلگرام دانش‌آموز هم اعمال شد");
         tcClass = null;
         renderApp();
       } catch (e) { showToast("❌ " + e.message); }

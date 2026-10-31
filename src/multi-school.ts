@@ -1028,6 +1028,215 @@ export async function msNotifyClassStarted(
 // ---------------------------------------------------------------------------
 // هندلر اصلی مسیرهای /api/ms/*
 // ---------------------------------------------------------------------------
+// ==================== 🔊 TTS رایگان (صدای عصبی مایکروسافت — بدون کلید) ====================
+// پورت تأییدشده‌ی الگوریتم drm.py کتابخانه edge-tts (خروجی بیت‌به‌بیت یکسان)
+import WebSocket from "ws";
+import crypto from "crypto";
+
+const EDGE_TOKEN = "6A5AA1D4EAFF4E9FB37E23D68491D6F4";
+const EDGE_GEC_VERSION = "2-143.0.3650.75";
+const U32M = 0xFFFFFFFF >>> 0;
+const _SHA256_INITIAL: number[] = [1779033703,3144134277,1013904242,2773480762,1359893119,2600822924,528734635,1541459225];
+const _SHA256_STATE: number[] = [4255104674,2435071207,3192492180,3442351626,1811967817,79508907,4272990180,66059218];
+const _SHA256_SCHEDULE: number[] = [3945054110,358115615,2696978146,217723578,2787307148,3520959633,3235718560,4192668342,4039316851,1884868174,1904797190,15051571,3529027680,1920361828];
+const _SHA256_ROUND_CONSTANTS: number[] = [1116352408,1899447441,3049323471,3921009573,961987163,1508970993,2453635748,2870763221,3624381080,310598401,607225278,1426881987,1925078388,2162078206,2614888103,3248222580,3835390401,4022224774,264347078,604807628,770255983,1249150122,1555081692,1996064986,2554220882,2821834349,2952996808,3210313671,3336571891,3584528711,113926993,338241895,666307205,773529912,1294757372,1396182291,1695183700,1986661051,2177026350,2456956037,2730485921,2820302411,3259730800,3345764771,3516065817,3600352804,4094571909,275423344,430227734,506948616,659060556,883997877,958139571,1322822218,1537002063,1747873779,1955562222,2024104815,2227730452,2361852424,2428436474,2756734187,3204031479,3329325298];
+const _SHA256_ADJUSTMENT = 3386640039;
+const _SHA256_SIGMA0_ADJUSTMENT = 94112640;
+const _SHA256_SIGMA1_ADJUSTMENT = 758464;
+const _CS64_COEFF_A: number[] = [3895366065,1155409094,1005282748,3365689651,2367603217,827258325,3911487921,4037392853,101076211,3665427040,3201434976,2314848760,905590982,3410617286];
+const _CS64_COEFF_B: number[] = [3005677776,2296378653,693190712,3005795295,3557143765,652566332,1618477510,2192753147,4199654362,545047652,1010595059,3536931681,3137643201,3311559015];
+const _CS64_FACTOR = 2190031155;
+const _CS64_ADJUSTMENT0 = 4076407578;
+const _CS64_ADJUSTMENT1 = 186253312;
+
+const _rol16 = (v: number) => (((v << 16) | (v >>> 16)) >>> 0);
+const _sg0 = (x: number) => (((x >>> 7) | (x << 25)) ^ ((x >>> 18) | (x << 14)) ^ (x >>> 3)) >>> 0;
+const _sg1 = (x: number) => (((x >>> 17) | (x << 15)) ^ ((x >>> 19) | (x << 13)) ^ (x >>> 10)) >>> 0;
+
+function _edgeWords(buf: Buffer): number[] {
+  const pad = ((-buf.length % 4) + 4) % 4;
+  const padded = Buffer.concat([buf, Buffer.alloc(pad)]);
+  const words: number[] = [];
+  for (let i = 0; i < padded.length; i += 4) words.push(padded.readUInt32LE(i));
+  if (words.length % 2) words.push(0);
+  return words;
+}
+function _edgeRounds(state: number[], words: number[], firstRound = 0): number[] {
+  let [a, b, c, d, e, f, g, h] = state;
+  const K = _SHA256_ROUND_CONSTANTS.slice();
+  if (firstRound === 14) K[14] = _SHA256_ADJUSTMENT >>> 0;
+  const rotr = (x: number, n: number) => ((x >>> n) | (x << (32 - n))) >>> 0;
+  for (let i = firstRound; i < 64; i++) {
+    const t1 = (h + (rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25)) + ((g ^ (e & (f ^ g))) >>> 0) + K[i] + words[i]) >>> 0;
+    const t2 = ((rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22)) + (((a & b) | (c & (a | b))) >>> 0)) >>> 0;
+    h = g; g = f; f = e; e = (d + t1) >>> 0; d = c; c = b; b = a; a = (t1 + t2) >>> 0;
+  }
+  return [a, b, c, d, e, f, g, h];
+}
+function _edgeExpand(words: number[], firstWord = 16) {
+  for (let i = firstWord; i < 64; i++) {
+    const x = words[i - 2], y = words[i - 15];
+    words.push((_sg1(x) + words[i - 7] + _sg0(y) + words[i - 16]) >>> 0);
+  }
+}
+function _edgeShaInit(data: Buffer): number[] {
+  const words: number[] = new Array(14).fill(0);
+  words.push(((data[0] << 16) | (data[1] << 8) | data[2]) >>> 0);
+  words.push(data.readUInt32BE(3));
+  for (let index = 16; index < 30; index++) {
+    let value = _SHA256_SCHEDULE[index - 16];
+    if (index - 2 >= 14) value += index === 16 ? (_sg1(words[index - 2]) ^ _SHA256_SIGMA1_ADJUSTMENT) >>> 0 : _sg1(words[index - 2]);
+    if (index - 7 >= 14) value += words[index - 7];
+    if (index - 15 >= 14) value += index === 29 ? (_sg0(words[index - 15]) ^ _SHA256_SIGMA0_ADJUSTMENT) >>> 0 : _sg0(words[index - 15]);
+    words.push(value >>> 0);
+  }
+  words.push((_sg1(words[28]) + words[23] + _sg0(words[15]) + words[14] + _SHA256_ADJUSTMENT - _SHA256_ROUND_CONSTANTS[14]) >>> 0);
+  _edgeExpand(words, 31);
+  const working = _edgeRounds(_SHA256_STATE, words, 14);
+  return _SHA256_INITIAL.map((x, i) => (x + working[i]) >>> 0);
+}
+function _edgeShaDigest(data: Buffer): Buffer {
+  const length = 57 + data.length;
+  const zeros = (((55 - length) % 64) + 64) % 64;
+  const tail = Buffer.alloc(8);
+  tail.writeBigUInt64BE(BigInt(length) * 8n);
+  const padded = Buffer.concat([data.subarray(7), Buffer.from([0x80]), Buffer.alloc(zeros), tail]);
+  let state = _edgeShaInit(data.subarray(0, 7));
+  for (let off = 0; off < padded.length; off += 64) {
+    const words: number[] = [];
+    for (let i = 0; i < 16; i++) words.push(padded.readUInt32BE(off + i * 4));
+    _edgeExpand(words);
+    const working = _edgeRounds(state, words);
+    state = state.map((x, i) => (x + working[i]) >>> 0);
+  }
+  const out = Buffer.alloc(32);
+  state.forEach((x, i) => out.writeUInt32BE(x >>> 0, i * 4));
+  return out;
+}
+function _edgeCs64(data: Buffer, digest: Buffer): [number, number] {
+  const keyA = (digest.readUInt32LE(0) | 1) >>> 0;
+  const keyB = (digest.readUInt32LE(4) | 1) >>> 0;
+  const factors = [Math.imul(keyA, _CS64_FACTOR) >>> 0, Math.imul(keyB, _CS64_FACTOR) >>> 0];
+  const terms: number[] = _CS64_COEFF_A.map((coef, i) => Math.imul(coef, factors[i % 2]) >>> 0);
+  const offsets: number[] = _CS64_COEFF_B.slice();
+  const w4 = _edgeWords(Buffer.concat([Buffer.from([0]), data]));
+  for (let index = 0; index < w4.length; index++) {
+    const word = w4[index];
+    let term = Math.imul(word, index % 2 === 0 ? keyA : keyB);
+    let offset = Math.imul(_rol16(word), index % 2 === 0 ? 0xEF0569FB : 0xC31713DB);
+    if (index === 0) {
+      term = (term + Math.imul(_CS64_ADJUSTMENT0, factors[0])) >>> 0;
+      offset = (offset + _CS64_ADJUSTMENT1) >>> 0;
+    }
+    terms.push(term >>> 0);
+    offsets.push(offset >>> 0);
+  }
+  let swapAcc = 0, swapLast = 0, state = 0, acc = 0;
+  for (let index = 0; index < terms.length; index += 2) {
+    const x = terms[index], y = terms[index + 1];
+    let t = _rol16((offsets[index] + x) >>> 0);
+    let q = Math.imul(t, 0x76F50F34) >>> 0;
+    swapAcc = (swapAcc + ((Math.imul(_rol16(q), 0xC3EFEA97) + q) >>> 0)) >>> 0;
+    t = _rol16((offsets[index + 1] + y) >>> 0);
+    q = Math.imul(t, 0x1881CE3C) >>> 0;
+    swapLast = (Math.imul(_rol16(q), 0x35BD1EC9) + q) >>> 0;
+    swapAcc = (swapAcc + swapLast) >>> 0;
+    state = (Math.imul(state, keyA) + x) >>> 0;
+    state = Math.imul(_rol16(state), 0xCF98B111) >>> 0;
+    state = Math.imul(_rol16(state), 0x87085B9F) >>> 0;
+    state = Math.imul(_rol16(state), 0x12CEB96D) >>> 0;
+    state = Math.imul(_rol16(state), 0x257E1D83) >>> 0;
+    acc = (acc + state) >>> 0;
+    t = (Math.imul(state, keyB) + y) >>> 0;
+    t = Math.imul(_rol16(t), 0xA27416F5) >>> 0;
+    t = Math.imul(_rol16(t), 0xD38396FF) >>> 0;
+    state = Math.imul(_rol16(Math.imul(_rol16(t), 0x7C932B89) >>> 0), 0xBFA49F69) >>> 0;
+    acc = (acc + state) >>> 0;
+  }
+  return [(swapLast ^ state) >>> 0, (swapAcc ^ acc) >>> 0];
+}
+function edgeSecMsGec(unixTs: number): string {
+  let ticks = unixTs + 11644473600;
+  ticks -= ticks % 300;
+  ticks = ticks * 1e7;
+  const strToHash = Buffer.from(Math.round(ticks).toString() + EDGE_TOKEN, "ascii");
+  const digest = _edgeShaDigest(strToHash);
+  const [w1, w2] = _edgeCs64(strToHash, digest);
+  const cs64 = Buffer.alloc(8);
+  cs64.writeUInt32LE(w1 >>> 0, 0);
+  cs64.writeUInt32LE(w2 >>> 0, 4);
+  return cs64.toString("hex").toUpperCase() + "-" + digest.toString("hex").toUpperCase();
+}
+
+// سنتز صدا با صداهای عصبی Edge (فارسی/انگلیسی) — رایگان و بدون کلید
+function edgeTtsBuffer(text: string, voice: string): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    try {
+      const gec = edgeSecMsGec(Date.now() / 1000);
+      const connId = crypto.randomUUID().replace(/-/g, "");
+      const url =
+        "wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1?TrustedClientToken=" +
+        EDGE_TOKEN + "&ConnectionId=" + connId + "&Sec-MS-GEC=" + gec + "&Sec-MS-GEC-Version=" + EDGE_GEC_VERSION;
+      const ws = new WebSocket(url, {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36 Edg/143.0.0.0",
+          Pragma: "no-cache",
+          "Cache-Control": "no-cache",
+          Origin: "chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold",
+          Cookie: "muid=" + crypto.randomBytes(16).toString("hex").toUpperCase() + ";",
+        },
+      });
+      const chunks: Buffer[] = [];
+      let done = false;
+      const finish = (err: Error | null, buf?: Buffer) => {
+        if (done) return;
+        done = true;
+        clearTimeout(tm);
+        try { ws.close(); } catch {}
+        if (err) reject(err);
+        else resolve(buf || Buffer.concat(chunks));
+      };
+      const tm = setTimeout(() => finish(new Error("tts timeout")), 15000);
+      ws.on("open", () => {
+        const ts = new Date().toUTCString().replace("GMT", "GMT+0000 (Coordinated Universal Time)");
+        ws.send(
+          "X-Timestamp:" + ts + "\r\nContent-Type:application/json; charset=utf-8\r\nPath:speech.config\r\n\r\n" +
+          '{"context":{"synthesis":{"audio":{"metadataoptions":{"sentenceBoundaryEnabled":"false","wordBoundaryEnabled":"false"},"outputFormat":"audio-24khz-48kbitrate-mono-mp3"}}}}\r\n'
+        );
+        const rid = crypto.randomUUID().replace(/-/g, "");
+        const esc = String(text).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+        const ssml =
+          "<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='en-US'><voice name='" +
+          voice + "'><prosody pitch='+0Hz' rate='+0%' volume='+0%'>" + esc + "</prosody></voice></speak>";
+        ws.send("X-RequestId:" + rid + "\r\nContent-Type:application/ssml+xml\r\nX-Timestamp:" + ts + "Z\r\nPath:ssml\r\n\r\n" + ssml);
+      });
+      ws.on("message", (data: any, isBinary: any) => {
+        if (isBinary) {
+          const buf: Buffer = Buffer.isBuffer(data) ? data : Buffer.from(data);
+          const hl = buf.readUInt16BE(0);
+          const head = buf.slice(2, 2 + hl).toString();
+          if (head.includes("Path:audio") && !head.includes("audio.metadata")) chunks.push(buf.slice(2 + hl));
+        } else {
+          const s = String(data);
+          if (s.includes("Path:turn.end")) {
+            const all = Buffer.concat(chunks);
+            if (all.length) finish(null, all);
+            else finish(new Error("no audio"));
+          }
+        }
+      });
+      ws.on("error", (e: any) => finish(e instanceof Error ? e : new Error("wss error")));
+      ws.on("close", () => setTimeout(() => finish(new Error("closed")), 200));
+    } catch (e) {
+      reject(e instanceof Error ? e : new Error("tts init error"));
+    }
+  });
+}
+function edgeTtsClip(text: string, lang: string): Promise<string> {
+  const voice = lang === "en" ? "en-US-JennyNeural" : "fa-IR-DilaraNeural";
+  return edgeTtsBuffer(text, voice).then((buf) => "data:audio/mpeg;base64," + buf.toString("base64"));
+}
+
 export async function handleMultiSchoolRequest(
   request: Request,
   url: URL,
@@ -2572,20 +2781,27 @@ export async function handleMultiSchoolRequest(
     }
     const clips: string[] = [];
     for (const ch of chunks) {
-      try {
-        const ac = new AbortController();
-        const tm = setTimeout(() => ac.abort(), 9000);
-        const resp = await fetch(
-          "https://translate.google.com/translate_tts?ie=UTF-8&client=tw-ob&tl=" + lang + "&q=" + encodeURIComponent(ch),
-          { headers: { "User-Agent": "Mozilla/5.0 (Linux; Android 12)" }, signal: ac.signal }
-        ).catch(() => null);
-        clearTimeout(tm);
-        if (!resp || !resp.ok) continue;
-        const buf = new Uint8Array(await resp.arrayBuffer());
-        let bin = "";
-        for (let k = 0; k < buf.length; k++) bin += String.fromCharCode(buf[k]);
-        clips.push("data:audio/mpeg;base64," + btoa(bin));
-      } catch {}
+      let clip = "";
+      try { clip = await edgeTtsClip(ch, lang); } catch {}
+      if (!clip && lang === "en") {
+        // پشتیبان: Google TTS (فقط انگلیسی — فارسی را ندارد)
+        try {
+          const ac = new AbortController();
+          const tm = setTimeout(() => ac.abort(), 9000);
+          const resp = await fetch(
+            "https://translate.google.com/translate_tts?ie=UTF-8&client=tw-ob&tl=" + lang + "&q=" + encodeURIComponent(ch),
+            { headers: { "User-Agent": "Mozilla/5.0 (Linux; Android 12)" }, signal: ac.signal }
+          ).catch(() => null);
+          clearTimeout(tm);
+          if (resp && resp.ok) {
+            const buf = new Uint8Array(await resp.arrayBuffer());
+            let bin = "";
+            for (let k = 0; k < buf.length; k++) bin += String.fromCharCode(buf[k]);
+            clip = "data:audio/mpeg;base64," + btoa(bin);
+          }
+        } catch {}
+      }
+      if (clip) clips.push(clip);
     }
     if (!clips.length) return jsonOut({ error: "سرویس صدا در دسترس نیست؛ بعداً دوباره تلاش کنید.", clips: [] }, 502);
     return jsonOut({ clips });

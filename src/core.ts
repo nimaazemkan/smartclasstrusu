@@ -63,7 +63,21 @@ async function saveStudent(db: D1Database, userId: number, name: string, grade: 
   const joined = new Date().toISOString();
   await db.prepare("INSERT INTO students (user_id, name, score, joined, level, grade) VALUES (?, ?, 0, ?, 1, ?) ON CONFLICT(user_id) DO UPDATE SET name = excluded.name, grade = excluded.grade").bind(userId, name, joined, grade).run();
 }
-async function updateScore(db: D1Database, userId: number, delta: number): Promise<Student | null> { await db.prepare("UPDATE students SET score = score + ? WHERE user_id = ?").bind(delta, userId).run(); await updateLevel(db, userId); return await getStudent(db, userId); }
+async function updateScore(db: D1Database, userId: number, delta: number): Promise<Student | null> {
+  await db.prepare("UPDATE students SET score = score + ? WHERE user_id = ?").bind(delta, userId).run();
+  await updateLevel(db, userId);
+  // همگام‌سازی با سامانه‌ی جدید (شبکه مدارس هوشمند) تا امتیاز بازی‌ها در پنل هم دیده شود
+  try {
+    const st: any = await db.prepare("SELECT id, school_id, class_id FROM ms_students WHERE tg_id = ? ORDER BY id DESC LIMIT 1").bind(String(userId)).first();
+    if (st) {
+      await db
+        .prepare("INSERT INTO ms_points (school_id, class_id, student_id, delta, reason, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+        .bind(Number(st.school_id), Number(st.class_id), Number(st.id), delta, "بازی و فعالیت تلگرام 🎮", "ربات تلگرام", new Date().toISOString())
+        .run();
+    }
+  } catch {}
+  return await getStudent(db, userId);
+}
 async function getStudentByName(db: D1Database, name: string): Promise<Student | null> { return await db.prepare("SELECT * FROM students WHERE name = ?").bind(name).first<Student>(); }
 async function getAllStudents(db: D1Database): Promise<Student[]> { return (await db.prepare("SELECT * FROM students WHERE name != '' ORDER BY score DESC").all<Student>()).results; }
 async function resetScores(db: D1Database) { await db.prepare("UPDATE students SET score = 0, level = 1").run(); }

@@ -565,7 +565,7 @@ export const LIVE_CLASS_JS = String.raw`
             '<div class="live-video-tile" id="primaryVideoSlot">' +
               '<div class="muted" style="text-align:center;padding:14px;">🎙 در انتظار فعال شدن صدا یا تصویر استاد...<br><span style="font-size:11px;">(وایت‌برد و اسلایدها در پایین کاملاً زنده و فعال هستند)</span></div>' +
             '</div>' +
-           +
+          '</div>' +
           '<div style="margin-top:7px;display:flex;justify-content:center;gap:8px;align-items:center;flex-wrap:wrap;">' +
             '<button id="liveSoundBtn" class="btn btn-gold btn-sm" style="display:none;width:auto;" onclick="toggleLiveSound()">🔈 روشن کردن صدای کلاس</button>' +
             '<span id="liveSoundHint" class="muted" style="display:none;font-size:11.5px;">💡 برای شنیدن صدا، یک بار دکمه صدا را لمس کنید (محدودیت خودکارپخش مرورگرها)</span>' +

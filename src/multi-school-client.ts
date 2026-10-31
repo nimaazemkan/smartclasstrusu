@@ -2808,6 +2808,24 @@ const SCHOOL_JS = String.raw`
             '<div style="font-size:22px;font-weight:800;letter-spacing:3px;margin:8px 0;" dir="ltr">' + esc((d.class && d.class.joinCode) || "—") + '</div>' +
             '<div class="muted" style="font-size:11.5px;">این کد را به دانش‌آموزان بدهید تا خودشان از صفحه ورود → «✍️ ثبت‌نام دانش‌آموز جدید» با کد ملی ثبت‌نام کنند.</div>' +
           '</div>' +
+          '<div class="section-title">⭐ امتیاز دانش‌آموزان</div>' +
+          '<div class="card">' +
+            ((d.roster || []).length
+              ? d.roster.map(function (x) {
+                  var pts = Number(x.points || 0);
+                  return '<div style="display:flex;align-items:center;gap:5px;padding:8px 0;border-bottom:1px solid var(--border);flex-wrap:wrap;">' +
+                    '<b style="flex:1;min-width:80px;">' + esc(x.name) + '</b>' +
+                    '<span class="badge-pill" style="background:rgba(245,158,11,0.18);color:#FCD34D;">⭐ ' + pts + '</span>' +
+                    '<button class="btn btn-emerald btn-sm" style="padding:5px 9px;" onclick="setPoints(' + x.id + ', 1)">+۱</button>' +
+                    '<button class="btn btn-emerald btn-sm" style="padding:5px 9px;" onclick="setPoints(' + x.id + ', 5)">+۵</button>' +
+                    '<button class="btn btn-rose btn-sm" style="padding:5px 9px;" onclick="setPoints(' + x.id + ', -1)">−۱</button>' +
+                    '<button class="btn btn-rose btn-sm" style="padding:5px 9px;" onclick="setPoints(' + x.id + ', -5)">−۵</button>' +
+                    '<button class="btn btn-ghost btn-sm" style="padding:5px 9px;" onclick="setPointsCustom(' + x.id + ')">⚙️</button>' +
+                  '</div>';
+                }).join("")
+              : '<div class="muted">دانش‌آموزی در کلاس نیست.</div>') +
+            '<div class="muted" style="font-size:11px;margin-top:8px;">⚙️ برای مقدار دلخواه (مثلاً +۱۰ یا −۳) و دلیل امتیاز، دکمه‌ی ⚙️ کنار هر دانش‌آموز را بزنید.</div>' +
+          '</div>' +
           '<div class="card"><table class="table"><thead><tr><th>نام</th><th>🎒 کد دانش‌آموز</th><th>👪 کد والدین</th><th>🏅</th></tr></thead><tbody>' +
           (d.roster || []).map(function (x) {
             return '<tr>' +
@@ -2832,6 +2850,24 @@ const SCHOOL_JS = String.raw`
           '</div>' +
           backBtnHtml();
       } catch (e) { main.innerHTML = '<div class="card">❌ ' + esc(e.message) + '</div>'; }
+    }
+
+    async function setPoints(studentId, delta, reason) {
+      try {
+        await api("/api/ms/teacher/points", { studentId: studentId, delta: delta, reason: reason || "" });
+        showToast(delta > 0 ? "⭐ +" + delta + " امتیاز ثبت شد" : "🔻 " + delta + " امتیاز ثبت شد");
+        tcClass = null;
+        renderApp();
+      } catch (e) { showToast("❌ " + e.message); }
+    }
+
+    function setPointsCustom(studentId) {
+      var v = prompt("مقدار امتیاز (مثلاً 10 یا -3):", "10");
+      if (v === null) return;
+      var n = Number(v);
+      if (!isFinite(n) || !n) return showToast("مقدار نامعتبر است");
+      var r = prompt("دلیل امتیاز (اختیاری):", n > 0 ? "فعالیت عالی" : "کسر امتیاز");
+      setPoints(studentId, n, r || "");
     }
 
     function issueCert(studentId, name) {

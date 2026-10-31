@@ -1575,6 +1575,12 @@ export async function handleMultiSchoolRequest(
         .prepare("SELECT id, name, student_code, parent_code, tg_id FROM ms_students WHERE class_id = ? AND school_id = ? ORDER BY name")
         .bind(cid, schoolId)
         .all();
+      const ptsRows = await db
+        .prepare("SELECT student_id, COALESCE(SUM(delta),0) p FROM ms_points WHERE school_id = ? AND class_id = ? GROUP BY student_id")
+        .bind(schoolId, cid)
+        .all();
+      const ptsMap: Record<number, number> = {};
+      for (const pr of (ptsRows.results || []) as any[]) ptsMap[Number(pr.student_id)] = Number(pr.p || 0);
       const today = todayStr();
       const att = await db
         .prepare("SELECT student_id, status FROM ms_attendance WHERE class_id = ? AND date = ?")
@@ -1594,6 +1600,7 @@ export async function handleMultiSchoolRequest(
           studentCode: s.student_code,
           parentCode: s.parent_code,
           todayStatus: attMap[Number(s.id)] || "",
+          points: ptsMap[Number(s.id)] || 0,
         })),
         grades: (grades.results || []).map((g: any) => ({
           studentId: Number(g.student_id),

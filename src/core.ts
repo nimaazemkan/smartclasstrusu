@@ -3689,10 +3689,12 @@ ${essayText.slice(0, 8000)}
 // ۵. مربی تمرین مکالمه زبان انگلیسی (ویس‌به‌ویس و متنی)
 async function runEnglishConversationTurn(
   env: Env,
-  userUtterance: string
+  userUtterance: string,
+  history: string[] = []
 ): Promise<{ correctionFa: string; englishReply: string; persianMeaning: string }> {
+  const recent = history.slice(-8).map((h, i) => `${i + 1}. ${h}`).join("\n");
   const prompt = `You are a friendly English speaking tutor for an Iranian student.
-The student just said (in English or Finglish/Persian):
+${recent ? `Recent conversation so far:\n${recent}\n\n` : ""}The student just said (in English or Finglish/Persian):
 "${userUtterance}"
 
 Respond ONLY in valid JSON with these exact 3 fields:
@@ -4073,6 +4075,75 @@ const DEFAULT_DICTATION_TEXTS: { title: string; text: string; voiceFileId?: stri
     text: "فرآیند فتوسنتز در کلروپلاست یاخته‌های گیاهی با جذب انرژی خورشید انجام می‌شود و موجودات ذره‌بینی و زیست‌بوم‌های گوناگون به این چرخه حیاتی وابسته‌اند.",
   },
 ];
+
+// ساخت متن دیکته فارسی با هوش مصنوعی (پخش صوتی در کلاینت انجام می‌شود)
+async function generateDictationPassageWithAI(env: Env, topic: string): Promise<{ passage: string }> {
+  const prompt = `یک متن کوتاه دیکته فارسی برای دانش‌آموز${topic.trim() ? ` با موضوع «${topic.trim()}»` : ""} بنویس:
+- ۳ تا ۵ جمله ساده، روان و مناسب سن دانش‌آموز
+- با نقطه‌گذاری درست
+- شامل چند واژه با املای چالش‌برانگیز (مثل ی/ي، ک/ك، نیم‌فاصله، ه/ت)
+فقط یک شیء JSON معتبر برگردان:
+{ "passage": "متن کامل دیکته" }`;
+  const raw = await callGroqText(env, "فقط JSON خام و معتبر برگردان.", prompt, 700, 0.6);
+  const m = raw.match(/\{[\s\S]*\}/);
+  if (m) {
+    try {
+      const p = JSON.parse(m[0]);
+      if (p.passage && String(p.passage).trim().length > 10) return { passage: String(p.passage).trim() };
+    } catch {}
+  }
+  return { passage: "هوا امروز بسیار صاف و آفتابی است. پرندگان روی شاخه‌های درخت آواز می‌خوانند. ما به مدرسه می‌رویم و با علاقه درس می‌خوانیم." };
+}
+
+// شبیه‌سازی تصویری (SVG متحرک) آزمایش علوم + توضیح نوشتاری
+async function simulateScienceExperimentWithAI(
+  env: Env,
+  topic: string
+): Promise<{ title: string; svg: string; steps: string[]; explanation: string }> {
+  const fallback = {
+    title: topic.trim() || "آزمایش علوم",
+    svg: "",
+    steps: ["وسایل آزمایش را آماده کن.", "آزمایش را مرحله‌به‌مرحله انجام بده.", "مشاهداتت را ثبت کن.", "نتیجه را با فرضیه مقایسه کن."],
+    explanation: "در این آزمایش متغیرها را یکی‌یکی تغییر بده و هر بار نتیجه را یادداشت کن تا رابطه‌ی علمی میان آن‌ها را کشف کنی.",
+  };
+  const prompt = `آزمایش علمی با موضوع: «${topic.trim()}»
+یک «شبیه‌سازی تصویری» ساده، رنگارنگ و آموزشی از این آزمایش بساز که در یک صفحه وب نمایش داده شود.
+فقط یک شیء JSON معتبر با این فرمت دقیق برگردان:
+{
+  "title": "عنوان کوتاه آزمایش",
+  "svg": "<svg viewBox=\"0 0 400 260\" xmlns=\"http://www.w3.org/2000/svg\">...</svg>",
+  "steps": ["مرحله اول در یک جمله", "مرحله دوم", "مرحله سوم", "مرحله چهارم"],
+  "explanation": "توضیح علمی نوشتاری آزمایش به فارسی ساده و جذاب در ۴ تا ۷ خط"
+}
+شرایط فیلد svg:
+- فقط اشکال ساده: rect, circle, ellipse, line, polygon, path, text, g, defs, linearGradient, animate
+- viewBox برابر دقیقاً "0 0 400 260"
+- برچسب‌های فارسی کوتاه با <text font-size="12">
+- رنگ‌های شاد و پس‌زمینه روشن (#F8FAFC)
+- برای نشان دادن حرکت می‌توانی <animate> ساده بگذاری (مثل حباب، شعله، جریان آب)
+- هیچ <script> یا رویداد onclick نگذار
+- حداکثر ۳۰ المان`;
+  const raw = await callGroqText(env, "شما طراح شبیه‌سازی‌های آموزشی علوم هستید. فقط JSON خام معتبر برگردانید.", prompt, 3000, 0.5);
+  const m = raw.match(/\{[\s\S]*\}/);
+  if (m) {
+    try {
+      const p = JSON.parse(m[0]);
+      const svg = String(p.svg || "");
+      if (svg.includes("<svg")) {
+        return {
+          title: String(p.title || fallback.title),
+          svg: svg
+            .replace(/<script[\s\S]*?<\/script>/gi, "")
+            .replace(/\son\w+\s*=\s*"[^"]*"/gi, "")
+            .replace(/\son\w+\s*=\s*'[^']*'/gi, ""),
+          steps: Array.isArray(p.steps) ? p.steps.slice(0, 6).map((x: any) => String(x)) : fallback.steps,
+          explanation: String(p.explanation || fallback.explanation),
+        };
+      }
+    } catch {}
+  }
+  return fallback;
+}
 
 async function evaluateDictationWithAI(
   env: Env,
@@ -10757,7 +10828,9 @@ interface AppCoreDeps {
   extractTextFromImagesWithVision: (env: any, urls: string[]) => Promise<string>;
   generateMindMapPngWithAI: (env: any, topic: string) => Promise<{ png: Uint8Array | null; rootTitle: string; textFallback: string }>;
   generateCertificatePng: (name: string, grade: string, score: number, award: string) => Promise<Uint8Array | null>;
-  runEnglishConversationTurn: (env: any, text: string) => Promise<any>;
+  runEnglishConversationTurn: (env: any, text: string, history?: string[]) => Promise<any>;
+  generateDictationPassageWithAI: (env: any, topic: string) => Promise<{ passage: string }>;
+  simulateScienceExperimentWithAI: (env: any, topic: string) => Promise<{ title: string; svg: string; steps: string[]; explanation: string }>;
   evaluatePersianEssayWithAI: (env: any, text: string) => Promise<string>;
   evaluateDictationWithAI: (env: any, expected: string, studentOcr: string) => Promise<string>;
   runScienceLabStepWithAI: (env: any, topic: string, step: number, log: string[], chosen?: string) => Promise<any>;
@@ -10938,11 +11011,13 @@ async function handleAppRequest(
             case "essay":
               return await core.evaluatePersianEssayWithAI(env, String(p.text || ""));
             case "dictation":
+              if (String(p.mode || "") === "play") return await core.generateDictationPassageWithAI(env, String(p.topic || ""));
               return await core.evaluateDictationWithAI(env, String(p.expected || ""), String(p.ocr || ""));
             case "science":
+              if (String(p.mode || "") === "simulate") return await core.simulateScienceExperimentWithAI(env, String(p.topic || ""));
               return await core.runScienceLabStepWithAI(env, String(p.topic || ""), Number(p.step || 0), Array.isArray(p.log) ? p.log : [], p.chosen);
             case "english":
-              return await core.runEnglishConversationTurn(env, String(p.text || ""));
+              return await core.runEnglishConversationTurn(env, String(p.text || ""), Array.isArray(p.history) ? p.history.map((h: any) => String(h)) : []);
             case "mindmap": {
               const r = await core.generateMindMapPngWithAI(env, String(p.topic || ""));
               return {
@@ -12046,6 +12121,8 @@ const APP_CORE_DEPS: AppCoreDeps = {
   evaluatePersianEssayWithAI,
   evaluateDictationWithAI,
   runScienceLabStepWithAI,
+  generateDictationPassageWithAI,
+  simulateScienceExperimentWithAI,
   runScientistChatTurn,
   generateWeeklyStudyPlanWithAI,
   generateLessonSummaryWithAI,

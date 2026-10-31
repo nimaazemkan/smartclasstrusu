@@ -336,6 +336,7 @@ export interface MultiSchoolDeps {
   generateQuiz?: (topic: string, count: number) => Promise<any>;
   aiTool?: (tool: string, payload: any) => Promise<any>;
   transcribeAudio?: (audioDataUrl: string) => Promise<string>;
+  textToSpeech?: (text: string, lang: string) => Promise<string>;
 }
 
 const CORS_HEADERS = {
@@ -2541,6 +2542,55 @@ export async function handleMultiSchoolRequest(
     if (!txt) return jsonOut({ error: "متنی از صدا دریافت نشد — واضح‌تر و نزدیک‌تر صحبت کنید." }, 422);
     return jsonOut({ text: txt });
   }
+  // ==================== 🔊 تبدیل متن به صدا (TTS رایگان بدون کلید) ====================
+  if (path === "/api/ms/edu/tts" && request.method === "POST" && (isStudent || isParent || isTeacher || isAdmin)) {
+    const body = (await request.json().catch(() => ({}))) as any;
+    const text = String(body.text || "").trim().slice(0, 1500);
+    const lang = String(body.lang || "fa").toLowerCase().startsWith("en") ? "en" : "fa";
+    if (!text) return jsonOut({ error: "متن برای پخش لازم است." }, 400);
+    if (deps.textToSpeech) {
+      try {
+        const one = await deps.textToSpeech(text, lang);
+        return jsonOut({ clips: one ? [one] : [] });
+      } catch (e: any) {
+        return jsonOut({ error: "سرویس صدا در دسترس نیست.", clips: [] }, 502);
+      }
+    }
+    // TTS رایگان و بدون کلید (Google Translate) — تکه‌تکه برای متن‌های بلند
+    const chunks: string[] = [];
+    let rest = text;
+    while (rest.length && chunks.length < 10) {
+      if (rest.length <= 170) { chunks.push(rest); break; }
+      let cut = -1;
+      for (const sep of [".", "!", "؟", "?", "\n", "،", ",", " "]) {
+        const idx = rest.lastIndexOf(sep, 170);
+        if (idx > 60) { cut = idx + 1; break; }
+      }
+      if (cut < 0) cut = 170;
+      chunks.push(rest.slice(0, cut).trim());
+      rest = rest.slice(cut).trim();
+    }
+    const clips: string[] = [];
+    for (const ch of chunks) {
+      try {
+        const ac = new AbortController();
+        const tm = setTimeout(() => ac.abort(), 9000);
+        const resp = await fetch(
+          "https://translate.google.com/translate_tts?ie=UTF-8&client=tw-ob&tl=" + lang + "&q=" + encodeURIComponent(ch),
+          { headers: { "User-Agent": "Mozilla/5.0 (Linux; Android 12)" }, signal: ac.signal }
+        ).catch(() => null);
+        clearTimeout(tm);
+        if (!resp || !resp.ok) continue;
+        const buf = new Uint8Array(await resp.arrayBuffer());
+        let bin = "";
+        for (let k = 0; k < buf.length; k++) bin += String.fromCharCode(buf[k]);
+        clips.push("data:audio/mpeg;base64," + btoa(bin));
+      } catch {}
+    }
+    if (!clips.length) return jsonOut({ error: "سرویس صدا در دسترس نیست؛ بعداً دوباره تلاش کنید.", clips: [] }, 502);
+    return jsonOut({ clips });
+  }
+
   if (path === "/api/ms/ai/ask" && request.method === "POST") {
     if (!deps.askAI) return jsonOut({ error: "سرویس هوش مصنوعی در دسترس نیست." }, 503);
     const body = (await request.json().catch(() => ({}))) as any;

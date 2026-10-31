@@ -2065,7 +2065,7 @@ const SCHOOL_JS = String.raw`
     }
 
     // ==================== 🧠 کارگاه یادگیری + 🎯🛒📚🎮 امکانات ادغام‌شده ====================
-    var labToolState = { tool: "", result: null, science: { topic: "", step: 0, log: [] }, eng: [] };
+    var labToolState = { tool: "", result: null, science: { topic: "", step: 0, log: [] }, eng: [], engEnded: false, dict: { mode: "", passage: "", typed: "", checked: false, diffHtml: "" }, sim: null };
     var labTools = [
       { key: "flashcards", icon: "🤖", title: "فلش‌کارت هوشمند", desc: "ساخت خودکار فلش‌کارت" },
       { key: "essay", icon: "✍️", title: "تصحیح انشا", desc: "ارزیابی نگارش فارسی" },
@@ -2096,7 +2096,7 @@ const SCHOOL_JS = String.raw`
     }
 
     function openLabTool(tool) {
-      labToolState = { tool: tool, result: null, science: { topic: "", step: 0, log: [] }, eng: [] };
+      labToolState = { tool: tool, result: null, science: { topic: "", step: 0, log: [] }, eng: [], engEnded: false, dict: { mode: "", passage: "", typed: "", checked: false, diffHtml: "" }, sim: null };
       activeTab = "labtool";
       renderApp();
     }
@@ -2146,6 +2146,9 @@ const SCHOOL_JS = String.raw`
     async function renderLabTool(main) {
       var t = labToolState.tool;
       var meta = labTools.find(function (x) { return x.key === t; }) || { icon: "🧠", title: "ابزار" };
+      if (t === "english") return renderEnglishLab(main, meta);
+      if (t === "dictation") return renderDictationLab(main, meta);
+      if (t === "science") return renderScienceLab(main, meta);
       main.innerHTML =
         '<div class="section-title">' + meta.icon + ' ' + esc(meta.title) + '</div>' +
         '<div class="card">' +
@@ -2262,6 +2265,377 @@ const SCHOOL_JS = String.raw`
         });
         showToast("✅ گزارش برای معلم ارسال شد؛ پس از تایید امتیاز می‌گیرید.");
       } catch (e) { showToast("❌ " + e.message); }
+    }
+
+    // ==================== 🔊 پخش صدا (TTS رایگان) ====================
+    function playClips(clips) {
+      return new Promise(function (resolve) {
+        var i = 0;
+        function next() {
+          if (i >= clips.length) return resolve();
+          try {
+            var a = new Audio(clips[i++]);
+            a.onended = next;
+            a.onerror = next;
+            a.play().catch(next);
+          } catch (e) { resolve(); }
+        }
+        next();
+      });
+    }
+    var ttsCache = {};
+    async function speakText(text, lang) {
+      var key = (lang || "fa") + "|" + text;
+      if (ttsCache[key] && ttsCache[key].length) return ttsCache[key];
+      var r = await api("/api/ms/edu/tts", { text: text, lang: lang || "fa" });
+      var clips = (r && r.clips) || [];
+      if (clips.length) { ttsCache[key] = clips; return clips; }
+      throw new Error("صدا ساخته نشد");
+    }
+    async function speakNow(text, lang) {
+      if (!text) return;
+      try {
+        var clips = await speakText(text, lang);
+        await playClips(clips);
+      } catch (e) {
+        try {
+          if (window.speechSynthesis) {
+            var u = new SpeechSynthesisUtterance(text);
+            u.lang = (lang === "en") ? "en-US" : "fa-IR";
+            window.speechSynthesis.speak(u);
+            return;
+          }
+        } catch (e2) {}
+        showToast("پخش صدا در دسترس نیست");
+      }
+    }
+
+    // ==================== 🎤 ضبط صوت عمومی ====================
+    var gRec = null;
+    var gRecChunks = [];
+    function startVoiceInput(cb) {
+      if (gRec && gRec.state === "recording") { try { gRec.stop(); } catch (e) {} return; }
+      if (typeof MediaRecorder === "undefined") return showToast("ضبط صدا در این دستگاه پشتیبانی نمی‌شود");
+      navigator.mediaDevices.getUserMedia({ audio: true }).then(function (stream) {
+        gRecChunks = [];
+        var mime = MediaRecorder.isTypeSupported("audio/webm;codecs=opus") ? "audio/webm;codecs=opus" : "";
+        gRec = new MediaRecorder(stream, mime ? { mimeType: mime, audioBitsPerSecond: 24000 } : undefined);
+        gRec.ondataavailable = function (e) { if (e.data && e.data.size) gRecChunks.push(e.data); };
+        gRec.onstop = function () {
+          stream.getTracks().forEach(function (t) { t.stop(); });
+          gRec = null;
+          var blob = new Blob(gRecChunks, { type: "audio/webm" });
+          if (!blob.size) return;
+          if (blob.size > 1400000) return showToast("صدای ضبط‌شده خیلی طولانی است (حداکثر ۹۰ ثانیه)");
+          showToast("⏳ در حال تبدیل صدا به متن...");
+          var reader = new FileReader();
+          reader.onload = function () {
+            var dataUrl = String(reader.result || "");
+            api("/api/ms/edu/ai/voice", { audio: dataUrl }).then(function (r) {
+              cb(r.text || "", dataUrl);
+            }).catch(function (e) { showToast("❌ " + e.message); });
+          };
+          reader.readAsDataURL(blob);
+        };
+        gRec.start();
+        showToast("🔴 در حال ضبط... (برای پایان، دوباره بزنید)");
+      }).catch(function () { showToast("دسترسی به میکروفون داده نشد"); });
+    }
+
+    // ==================== 🎧 مکالمه انگلیسی صوتی (دوطرفه) ====================
+    function renderEnglishLab(main, meta) {
+      var msgs = labToolState.eng || [];
+      var head = '<div class="section-title">' + meta.icon + ' ' + esc(meta.title) + ' — مربی صوتی</div>';
+      var bubbles = msgs.map(function (m, mi) {
+        if (m.who === "user") {
+          return '<div style="display:flex;justify-content:flex-end;margin:8px 0;">' +
+            '<div style="max-width:84%;background:rgba(59,130,246,0.16);border:1px solid rgba(59,130,246,0.35);border-radius:14px 14px 4px 14px;padding:9px 12px;">' +
+              (m.audio ? '<button class="btn btn-ghost btn-sm" style="padding:4px 9px;margin-bottom:5px;" onclick="playEngUserAudio(' + mi + ')">▶️ پیام صوتی شما</button>' : "") +
+              '<div style="font-size:13.5px;">' + esc(m.text) + '</div>' +
+            '</div></div>';
+        }
+        return '<div style="display:flex;justify-content:flex-start;margin:8px 0;">' +
+          '<div style="max-width:88%;background:var(--surface-2);border:1px solid var(--border);border-radius:14px 14px 14px 4px;padding:9px 12px;">' +
+            '<div style="font-size:13.5px;font-weight:600;">🤖 ' + esc(m.text) + '</div>' +
+            '<div style="margin-top:6px;">' +
+              '<button class="btn btn-gold btn-sm" style="padding:4px 9px;" onclick="playEngAiAudio(' + mi + ')">🔊 گوش دادن</button>' +
+            '</div>' +
+            (m.fa ? '<div class="muted" style="font-size:11.5px;margin-top:5px;">🇮🇷 ' + esc(m.fa) + '</div>' : "") +
+            (m.fix ? '<div class="muted" style="font-size:11.5px;margin-top:3px;">✏️ ' + esc(m.fix) + '</div>' : "") +
+          '</div></div>';
+      }).join("");
+      var userTurns = msgs.filter(function (m) { return m.who === "user"; }).length;
+      var words = 0;
+      msgs.forEach(function (m) { if (m.who === "user") words += (m.text.split(/\s+/).filter(Boolean)).length; });
+      var inputHtml = labToolState.engEnded
+        ? '<div class="card" style="text-align:center;border:1px solid rgba(16,185,129,0.45);">' +
+            '<div style="font-size:15px;font-weight:800;">🏁 مکالمه به پایان رسید</div>' +
+            '<div class="muted" style="margin-top:6px;">نوبت‌های شما: <b>' + userTurns + '</b> • کلمات انگلیسی تمرین‌شده: <b>' + words + '</b></div>' +
+            (session.role === "student" ? '<button class="btn btn-emerald" style="margin-top:9px;" onclick="submitLabReport()">📤 ارسال گزارش به معلم</button> ' : "") +
+            '<button class="btn btn-ghost" style="margin-top:9px;" onclick="restartEngConversation()">🔄 شروع مکالمه جدید</button>' +
+          '</div>'
+        : '<div class="card">' +
+            '<textarea id="engText" class="input" rows="2" placeholder="به انگلیسی بنویسید... (مثلاً: Hello! How are you?)"></textarea>' +
+            '<div style="display:flex;gap:6px;flex-wrap:wrap;">' +
+              '<button class="btn btn-emerald" onclick="sendEngTurnBtn()">📤 ارسال</button>' +
+              '<button class="btn btn-gold" onclick="toggleEngVoice()">🎤 گفتن با صدا</button>' +
+              '<button class="btn btn-rose" onclick="endEngConversation()">⏹ پایان مکالمه</button>' +
+            '</div>' +
+            '<div class="muted" id="micState" style="font-size:11px;margin-top:5px;">💡 هر وقت خواستید، مکالمه را با «⏹ پایان مکالمه» تمام کنید.</div>' +
+          '</div>';
+      main.innerHTML = head +
+        '<div class="card" style="padding:8px 10px;">' +
+          (msgs.length ? bubbles : '<div class="muted" style="text-align:center;padding:12px 0;">💬 برای شروع مکالمه، به انگلیسی بنویسید یا 🎤 را بزنید و صحبت کنید.</div>') +
+        '</div>' +
+        inputHtml +
+        '<div style="text-align:center;margin:12px 0;">' +
+          '<button class="btn btn-ghost btn-sm" onclick="activeTab=\'lab\';renderApp()">🔙 بازگشت به کارگاه</button>' +
+        '</div>';
+    }
+    function sendEngTurnBtn() {
+      var el = document.getElementById("engText");
+      var txt = ((el && el.value) || "").trim();
+      if (!txt) return showToast("متن را بنویسید یا با 🎤 صحبت کنید");
+      if (el) el.value = "";
+      sendEngTurn(txt, "");
+    }
+    async function sendEngTurn(text, voiceDataUrl) {
+      if (labToolState.engEnded) return showToast("مکالمه تمام شده — «شروع مکالمه جدید» را بزنید");
+      if (!text || !text.trim()) return showToast("متنی دریافت نشد؛ دوباره تلاش کنید");
+      var history = labToolState.eng.map(function (m) { return (m.who === "user" ? "Student: " : "Tutor: ") + m.text; });
+      labToolState.eng.push({ who: "user", text: text.trim(), audio: voiceDataUrl || "", fa: "", fix: "", clips: [] });
+      renderApp();
+      showToast("⏳ مربی در حال آماده کردن پاسخ...");
+      try {
+        var r = await api("/api/ms/edu/ai", { tool: "english", text: text.trim(), history: history });
+        var res = r.result || {};
+        var msg = { who: "ai", text: res.englishReply || res.reply || "Nice! Tell me more.", fa: res.persianMeaning || "", fix: res.correctionFa || "", clips: [] };
+        labToolState.eng.push(msg);
+        renderApp();
+        try {
+          var clips = await speakText(msg.text, "en");
+          msg.clips = clips;
+          playClips(clips);
+        } catch (e) {}
+      } catch (e) { showToast("❌ " + e.message); }
+    }
+    async function playEngAiAudio(mi) {
+      var m = labToolState.eng[mi];
+      if (!m) return;
+      try {
+        var clips = await speakText(m.text, "en");
+        m.clips = clips;
+        playClips(clips);
+      } catch (e) { speakNow(m.text, "en"); }
+    }
+    function playEngUserAudio(mi) {
+      var m = labToolState.eng[mi];
+      if (m && m.audio) { try { var a = new Audio(m.audio); a.play().catch(function () {}); } catch (e) {} }
+    }
+    function toggleEngVoice() {
+      if (labToolState.engEnded) return showToast("مکالمه تمام شده است");
+      startVoiceInput(function (text, dataUrl) { sendEngTurn(text, dataUrl); });
+    }
+    function endEngConversation() {
+      labToolState.engEnded = true;
+      renderApp();
+      showToast("✅ مکالمه به پایان رسید — آفرین!");
+    }
+    function restartEngConversation() {
+      labToolState.eng = [];
+      labToolState.engEnded = false;
+      renderApp();
+    }
+
+    // ==================== 🎙 دیکته هوشمند صوتی ====================
+    function renderDictationLab(main, meta) {
+      var st = labToolState.dict;
+      var head = '<div class="section-title">' + meta.icon + ' ' + esc(meta.title) + '</div>';
+      if (!st.mode) {
+        main.innerHTML = head +
+          '<div class="card">' +
+            '<div class="muted" style="margin-top:0;">یکی از دو روش را انتخاب کنید:</div>' +
+            '<button class="btn btn-gold" onclick="dictSetMode(\'voice\')">🎙 دیکته صوتی با هوش مصنوعی</button>' +
+            '<button class="btn btn-ghost" onclick="dictSetMode(\'check\')">✍️ بررسی دیکته‌ای که نوشته‌ام</button>' +
+          '</div>' +
+          '<div style="text-align:center;margin:12px 0;"><button class="btn btn-ghost btn-sm" onclick="activeTab=\'lab\';renderApp()">🔙 بازگشت به کارگاه</button></div>';
+        return;
+      }
+      if (st.mode === "check") {
+        main.innerHTML = head +
+          '<div class="card">' + labToolForm("dictation") +
+            '<button class="btn" onclick="runLabTool()">✨ اجرای هوشمند</button>' +
+          '</div>' +
+          '<div id="ltResult">' + (labToolState.result !== null ? renderLabResult(labToolState.result, "dictation") : "") + '</div>' +
+          '<div style="text-align:center;margin:12px 0;"><button class="btn btn-ghost btn-sm" onclick="dictSetMode(\'\')">🔙 بازگشت</button></div>';
+        return;
+      }
+      if (!st.passage) {
+        main.innerHTML = head +
+          '<div class="card">' +
+            '<input id="ltTopic" class="input" placeholder="موضوع دیکته (اختیاری) — مثلاً: طبیعت، مدرسه..." />' +
+            '<button class="btn btn-gold" onclick="dictMake()">✨ ساخت و پخش دیکته</button>' +
+            '<div class="muted" style="font-size:11.5px;margin-top:6px;">صدای هوش مصنوعی متن دیکته را می‌خواند؛ شما گوش می‌دهید و تایپ می‌کنید.</div>' +
+          '</div>' +
+          '<div style="text-align:center;margin:12px 0;"><button class="btn btn-ghost btn-sm" onclick="dictSetMode(\'\')">🔙 بازگشت</button></div>';
+        return;
+      }
+      var sents = dictSents();
+      main.innerHTML = head +
+        '<div class="card" style="border:1px solid rgba(245,158,11,0.45);">' +
+          '<b>🔊 دیکته آماده است</b>' +
+          '<div style="display:flex;gap:6px;flex-wrap:wrap;margin:8px 0;">' +
+            '<button class="btn btn-gold btn-sm" onclick="dictPlayAll()">▶️ پخش همه</button>' +
+            '<button class="btn btn-ghost btn-sm" onclick="dictPlayAll()">🔁 پخش دوباره</button>' +
+            sents.map(function (x, xi) { return '<button class="btn btn-ghost btn-sm" onclick="dictPlaySent(' + xi + ')">جمله ' + (xi + 1) + '</button>'; }).join("") +
+          '</div>' +
+          (st.checked
+            ? '<div style="background:var(--surface-2);border-radius:10px;padding:8px 10px;"><b>📝 متن دیکته:</b><div style="white-space:pre-wrap;font-size:13px;margin-top:5px;">' + esc(st.passage) + '</div></div>'
+            : '<div class="muted" style="font-size:11.5px;">متن دیکته پس از «بررسی» نمایش داده می‌شود.</div>') +
+        '</div>' +
+        '<div class="card">' +
+          '<textarea id="ltOcr" class="input" rows="5" placeholder="دیکته را اینجا تایپ کنید...">' + esc(st.typed) + '</textarea>' +
+          '<button class="btn btn-emerald" onclick="dictCheck()">✅ بررسی دیکته</button>' +
+        '</div>' +
+        (st.checked && labToolState.result !== null ? '<div id="ltResult">' + renderLabResult(labToolState.result, "dictation") + '</div>' : "") +
+        (st.checked && st.diffHtml ? '<div class="card"><b>🔎 مقایسه‌ی کلمات</b><div style="margin-top:6px;line-height:2.2;">' + st.diffHtml + '</div></div>' : "") +
+        '<div style="text-align:center;margin:12px 0;">' +
+          (session.role === "student" && st.checked ? '<button class="btn btn-emerald btn-sm" onclick="submitLabReport()">📤 ارسال گزارش به معلم</button> ' : "") +
+          '<button class="btn btn-ghost btn-sm" onclick="dictReset()">🔄 دیکته جدید</button>' +
+        '</div>';
+    }
+    function dictSents() {
+      var p = labToolState.dict.passage || "";
+      return (p.match(/[^.!؟]+[.!؟]*/g) || [p]).map(function (x) { return x.trim(); }).filter(Boolean);
+    }
+    function dictSetMode(m) {
+      labToolState.dict = { mode: m, passage: "", typed: "", checked: false, diffHtml: "" };
+      labToolState.result = null;
+      renderApp();
+    }
+    async function dictMake() {
+      var topic = ((document.getElementById("ltTopic") || {}).value) || "";
+      showToast("⏳ در حال ساخت دیکته...");
+      try {
+        var r = await api("/api/ms/edu/ai", { tool: "dictation", mode: "play", topic: topic.trim() });
+        var passage = (r.result && r.result.passage) || "";
+        if (!passage) return showToast("دیکته ساخته نشد؛ دوباره تلاش کنید");
+        labToolState.dict.passage = passage;
+        renderApp();
+        speakNow(passage, "fa");
+      } catch (e) { showToast("❌ " + e.message); }
+    }
+    function dictPlayAll() { speakNow(labToolState.dict.passage || "", "fa"); }
+    function dictPlaySent(i) { var s = dictSents()[i]; if (s) speakNow(s, "fa"); }
+    function dictReset() {
+      labToolState.dict = { mode: "voice", passage: "", typed: "", checked: false, diffHtml: "" };
+      labToolState.result = null;
+      renderApp();
+    }
+    async function dictCheck() {
+      var typed = ((document.getElementById("ltOcr") || {}).value) || "";
+      if (!typed.trim()) return showToast("ابتدا دیکته را تایپ کنید");
+      labToolState.dict.typed = typed;
+      showToast("⏳ در حال تصحیح...");
+      try {
+        var r = await api("/api/ms/edu/ai", { tool: "dictation", expected: labToolState.dict.passage, ocr: typed });
+        labToolState.result = r.result;
+        labToolState.dict.checked = true;
+        labToolState.dict.diffHtml = dictDiffHtml(labToolState.dict.passage, typed);
+        renderApp();
+      } catch (e) { showToast("❌ " + e.message); }
+    }
+    function dictNorm(w) {
+      return String(w || "")
+        .replace(/[\u200c\u200d]/g, "")
+        .replace(/[يئ]/g, "ی").replace(/ك/g, "ک").replace(/ة/g, "ه")
+        .replace(/[\u064B-\u0652\u0640]/g, "")
+        .replace(/[.!؟،,؛;:"'()«»]/g, "")
+        .toLowerCase().trim();
+    }
+    function dictDiffHtml(expected, typed) {
+      var ew = String(expected || "").split(/\s+/).filter(Boolean);
+      var tw = String(typed || "").split(/\s+/).filter(Boolean);
+      var used = {};
+      var out = tw.map(function (w) {
+        var nw = dictNorm(w);
+        var j = -1;
+        for (var k = 0; k < ew.length; k++) { if (!used[k] && dictNorm(ew[k]) === nw) { j = k; break; } }
+        if (j >= 0) { used[j] = 1; return '<span style="color:#34D399;">✅ ' + esc(w) + '</span>'; }
+        return '<span style="color:#F87171;">❌ ' + esc(w) + '</span>';
+      });
+      var missing = ew.filter(function (w, k) { return !used[k]; }).map(function (w) { return '<span style="color:#FBBF24;">➕ ' + esc(w) + '</span>'; });
+      return out.join(" ") + (missing.length ? '<div style="margin-top:6px;">کلمات جاافتاده: ' + missing.join(" ") + '</div>' : "");
+    }
+
+    // ==================== 🧪 آزمایشگاه علوم — شبیه‌سازی تصویری ====================
+    function renderScienceLab(main, meta) {
+      var head = '<div class="section-title">' + meta.icon + ' ' + esc(meta.title) + ' — شبیه‌ساز تعاملی</div>';
+      var sim = labToolState.sim;
+      main.innerHTML = head +
+        '<div class="card">' +
+          '<input id="ltTopic" class="input" placeholder="موضوع آزمایش را بنویسید یا با 🎤 بگویید (مثلاً: آزمایش فشار هوا)" value="' + esc(labToolState.science.topic || "") + '" />' +
+          '<div style="display:flex;gap:6px;flex-wrap:wrap;">' +
+            '<button class="btn btn-emerald" onclick="runScienceSim()">🔬 شبیه‌سازی تصویری آزمایش</button>' +
+            '<button class="btn btn-gold" onclick="scienceVoiceTopic()">🎤 گفتن موضوع با صدا</button>' +
+            '<button class="btn btn-ghost" onclick="runLabTool()">🧭 راهنمای گام‌به‌گام</button>' +
+          '</div>' +
+          '<div class="muted" id="micState" style="font-size:11px;margin-top:5px;">💡 موضوع آزمایش را بگویید تا هوش مصنوعی آن را تصویری شبیه‌سازی کند.</div>' +
+        '</div>' +
+        (sim ? renderScienceSim(sim) : "") +
+        '<div id="ltResult">' + (labToolState.result !== null ? renderLabResult(labToolState.result, "science") : "") + '</div>' +
+        (session.role === "student" && (sim || labToolState.result !== null)
+          ? '<div class="card" style="text-align:center;"><button class="btn btn-emerald" onclick="submitLabReport()">📤 ارسال گزارش به معلم (دریافت امتیاز پس از تایید)</button></div>'
+          : "") +
+        '<div style="text-align:center;margin:12px 0;"><button class="btn btn-ghost btn-sm" onclick="activeTab=\'lab\';renderApp()">🔙 بازگشت به کارگاه</button></div>';
+    }
+    function renderScienceSim(sim) {
+      var svgHtml = sim.svg
+        ? '<div style="background:#F8FAFC;border-radius:12px;padding:6px;overflow:hidden;">' + sanitizeSvg(sim.svg) + '</div>'
+        : '<div class="muted">تصویر شبیه‌سازی ساخته نشد؛ مراحل و توضیحات زیر را بخوانید.</div>';
+      return '<div class="card" style="border:1px solid rgba(59,130,246,0.45);">' +
+          '<div style="font-size:15px;font-weight:800;">🧪 ' + esc(sim.title || "شبیه‌سازی آزمایش") + '</div>' +
+          '<div style="margin:8px 0;">' + svgHtml + '</div>' +
+          ((sim.steps || []).length
+            ? '<div style="margin-top:8px;"><b>📋 مراحل آزمایش</b>' + sim.steps.map(function (x, i) {
+                return '<div style="padding:7px 10px;margin-top:5px;background:var(--surface-2);border-radius:9px;font-size:12.5px;"><b>' + (i + 1) + '.</b> ' + esc(x) + '</div>';
+              }).join("") + '</div>'
+            : "") +
+          (sim.explanation
+            ? '<div style="margin-top:9px;"><b>📝 توضیح علمی</b><div style="white-space:pre-wrap;font-size:13px;margin-top:5px;">' + esc(sim.explanation) + '</div>' +
+              '<button class="btn btn-gold btn-sm" style="margin-top:7px;" onclick="speakSimExplanation()">🔊 گوش دادن به توضیحات</button></div>'
+            : "") +
+        '</div>';
+    }
+    function sanitizeSvg(sv) {
+      return String(sv || "")
+        .replace(/<script[\s\S]*?<\/script>/gi, "")
+        .replace(/<foreignObject[\s\S]*?<\/foreignObject>/gi, "")
+        .replace(/\son\w+\s*=\s*"[^"]*"/gi, "")
+        .replace(/\son\w+\s*=\s*'[^']*'/gi, "")
+        .replace(/javascript:/gi, "");
+    }
+    function speakSimExplanation() {
+      var sim = labToolState.sim;
+      if (sim && sim.explanation) speakNow(sim.explanation, "fa");
+    }
+    async function runScienceSim() {
+      var topic = ((document.getElementById("ltTopic") || {}).value) || labToolState.science.topic || "";
+      if (!topic.trim()) return showToast("موضوع آزمایش را وارد کنید");
+      labToolState.science.topic = topic.trim();
+      showToast("⏳ در حال ساخت شبیه‌سازی تصویری...");
+      try {
+        var r = await api("/api/ms/edu/ai", { tool: "science", mode: "simulate", topic: topic.trim() });
+        labToolState.sim = r.result || null;
+        renderApp();
+      } catch (e) { showToast("❌ " + e.message); }
+    }
+    function scienceVoiceTopic() {
+      startVoiceInput(function (text) {
+        var el = document.getElementById("ltTopic");
+        if (el && text) el.value = text.trim();
+        showToast("✅ موضوع ثبت شد — «شبیه‌سازی تصویری» را بزنید");
+      });
     }
 
     // ---- 🎯 ماموریت روز ----
@@ -2811,10 +3185,11 @@ const SCHOOL_JS = String.raw`
           '<div class="section-title">⭐ امتیاز دانش‌آموزان</div>' +
           '<div class="card">' +
             ((d.roster || []).length
-              ? d.roster.map(function (x) {
+              ? d.roster.slice().sort(function (a, b) { return Number(b.points || 0) - Number(a.points || 0); }).map(function (x, xi) {
                   var pts = Number(x.points || 0);
+                  var rankIco = ["🥇", "🥈", "🥉"][xi] || ((xi + 1) + ".");
                   return '<div style="display:flex;align-items:center;gap:5px;padding:8px 0;border-bottom:1px solid var(--border);flex-wrap:wrap;">' +
-                    '<b style="flex:1;min-width:80px;">' + esc(x.name) + '</b>' +
+                    '<b style="flex:1;min-width:80px;">' + rankIco + ' ' + esc(x.name) + '</b>' +
                     '<span class="badge-pill" style="background:rgba(245,158,11,0.18);color:#FCD34D;">⭐ ' + pts + '</span>' +
                     '<button class="btn btn-emerald btn-sm" style="padding:5px 9px;" onclick="setPoints(' + x.id + ', 1)">+۱</button>' +
                     '<button class="btn btn-emerald btn-sm" style="padding:5px 9px;" onclick="setPoints(' + x.id + ', 5)">+۵</button>' +

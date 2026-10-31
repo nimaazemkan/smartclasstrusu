@@ -524,7 +524,48 @@ export async function msTgNotifyTeachersMapped(db: D1Database, deps: any, school
 
 // ===== همگام‌سازی امتیاز سامانه‌ی جدید با نمایش ربات تلگرام (جدول قدیمی students.score) =====
 const MS_LEGACY_LEVELS = [0, 10, 25, 50, 100, 200, 400];
-export async function msSyncLegacyScore(db: D1Database, studentId: number, delta: number): Promise<void> {
+async function msResyncLegacy(db: D1Database, studentId: number): Promise<{ name: string; points: number } | null> {
+  try {
+    const st: any = await db.prepare("SELECT id, name, tg_id, school_id, class_id FROM ms_students WHERE id = ?").bind(studentId).first();
+    if (!st) return null;
+    let total = Number((((await db.prepare("SELECT COALESCE(SUM(delta),0) AS t FROM ms_points WHERE student_id = ?").bind(studentId).first()) as any) || {}).t || 0);
+    let legUserId = "";
+    if (String(st.tg_id || "")) {
+      const leg: any = await db.prepare("SELECT user_id FROM students WHERE user_id = ?").bind(String(st.tg_id)).first();
+      if (leg) legUserId = String(leg.user_id);
+    }
+    if (!legUserId) {
+      const norm = (x: string) => String(x || "").replace(/[\u200c\u200d\u200e\u200f]/g, "").replace(/\s+/g, "").trim();
+      const rows = ((await db.prepare("SELECT user_id, name FROM students").all()).results || []) as any[];
+      const nm = norm(st.name);
+      let hit = rows.find((r: any) => norm(r.name) === nm);
+      if (!hit && nm.length >= 4) {
+        hit = rows.find((r: any) => {
+          const rn = norm(r.name);
+          return rn.length >= 4 && (rn.includes(nm) || nm.includes(rn));
+        });
+      }
+      if (hit) legUserId = String(hit.user_id);
+    }
+    if (!legUserId) return null;
+    const leg: any = await db.prepare("SELECT score FROM students WHERE user_id = ?").bind(legUserId).first();
+    const legScore = Number(leg?.score || 0);
+    if (legScore > total) {
+      await db
+        .prepare("INSERT INTO ms_points (school_id, class_id, student_id, delta, reason, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+        .bind(Number(st.school_id), Number(st.class_id), studentId, legScore - total, "انتقال امتیازهای قبلی تلگرام", "همگام‌سازی", new Date().toISOString())
+        .run();
+      total = legScore;
+    }
+    await db.prepare("UPDATE students SET score = ? WHERE user_id = ?").bind(total, legUserId).run();
+    let lvl = 1;
+    for (let k = 0; k < MS_LEGACY_LEVELS.length; k++) if (total >= MS_LEGACY_LEVELS[k]) lvl = k + 1;
+    await db.prepare("UPDATE students SET level = ? WHERE user_id = ?").bind(lvl, legUserId).run();
+    return { name: st.name, points: total };
+  } catch { return null; }
+}
+
+async function msSyncLegacyScore(db: D1Database, studentId: number, delta: number): Promise<void> {
   try {
     if (!delta) return;
     const st: any = await db.prepare("SELECT name, tg_id FROM ms_students WHERE id = ?").bind(studentId).first();
@@ -1565,7 +1606,9 @@ export async function handleMultiSchoolRequest(
     }
 
   // ==================== 📤 ارسال آزاد تکلیف دانش‌آموز ====================
-  if (path === "/api/ms/student/hw/send" && request.method === "POST" && isStudent) {
+  
+
+    if (path === "/api/ms/student/hw/send" && request.method === "POST" && isStudent) {
     const body = (await request.json().catch(() => ({}))) as any;
     const text = String(body.text || "").trim().slice(0, 4000);
     const photo = String(body.photo || "");
@@ -3319,6 +3362,19 @@ export async function handleMultiSchoolRequest(
       return jsonOut({ ok: true });
     }
     return jsonOut({ error: "نوع نامعتبر." }, 400);
+  }
+
+  if (path === "/api/ms/admin/resync-points" && request.method === "POST" && (isAdmin || isSuper)) {
+    const body = (await request.json().catch(() => ({}))) as any;
+    const rsSchool = Number(body.schoolId || schoolId);
+    if (!Number.isFinite(rsSchool) || rsSchool <= 0) return jsonOut({ error: "schoolId لازم است." }, 400);
+    const list = ((await db.prepare("SELECT id FROM ms_students WHERE school_id = ?").bind(rsSchool).all()).results || []) as any[];
+    const out: any[] = [];
+    for (const s2 of list) {
+      const one = await msResyncLegacy(db, Number(s2.id));
+      if (one) out.push(one);
+    }
+    return jsonOut({ ok: true, synced: out.length, students: out });
   }
 
   if (path === "/api/ms/teacher/points" && request.method === "POST" && (isTeacher || isAdmin)) {

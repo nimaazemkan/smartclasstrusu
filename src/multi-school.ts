@@ -537,7 +537,14 @@ export async function msSyncLegacyScore(db: D1Database, studentId: number, delta
     if (!legUserId) {
       const norm = (x: string) => String(x || "").replace(/[\u200c\u200d\u200e\u200f]/g, "").replace(/\s+/g, "").trim();
       const rows = ((await db.prepare("SELECT user_id, name FROM students").all()).results || []) as any[];
-      const hit = rows.find((r: any) => norm(r.name) === norm(st.name));
+      const nm = norm(st.name);
+      let hit = rows.find((r: any) => norm(r.name) === nm);
+      if (!hit && nm.length >= 4) {
+        hit = rows.find((r: any) => {
+          const rn = norm(r.name);
+          return rn.length >= 4 && (rn.includes(nm) || nm.includes(rn));
+        });
+      }
       if (hit) legUserId = String(hit.user_id);
     }
     if (!legUserId) return;

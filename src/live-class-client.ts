@@ -317,6 +317,15 @@ export const LIVE_CLASS_JS = String.raw`
       }
     }
 
+    if (!window._liveVisBound) {
+      window._liveVisBound = true;
+      document.addEventListener("visibilitychange", function() {
+        if (!document.hidden && activeTab === "live" && liveState.active) {
+          try { pollLiveClassroomOnce(false); } catch (e) {}
+        }
+      });
+    }
+
     async function startLiveClassByTeacher() {
       var titleEl = document.getElementById("liveClassTitleInp");
       var tgChk = document.getElementById("liveNotifyTgChk");
@@ -556,6 +565,10 @@ export const LIVE_CLASS_JS = String.raw`
             '<div class="live-video-tile" id="primaryVideoSlot">' +
               '<div class="muted" style="text-align:center;padding:14px;">🎙 در انتظار فعال شدن صدا یا تصویر استاد...<br><span style="font-size:11px;">(وایت‌برد و اسلایدها در پایین کاملاً زنده و فعال هستند)</span></div>' +
             '</div>' +
+           +
+          '<div style="margin-top:7px;display:flex;justify-content:center;gap:8px;align-items:center;flex-wrap:wrap;">' +
+            '<button id="liveSoundBtn" class="btn btn-gold btn-sm" style="display:none;width:auto;" onclick="toggleLiveSound()">🔈 روشن کردن صدای کلاس</button>' +
+            '<span id="liveSoundHint" class="muted" style="display:none;font-size:11.5px;">💡 برای شنیدن صدا، یک بار دکمه صدا را لمس کنید (محدودیت خودکارپخش مرورگرها)</span>' +
           '</div>';
       }
 
@@ -1430,6 +1443,8 @@ export const LIVE_CLASS_JS = String.raw`
           };
 
           await pc.setRemoteDescription(new RTCSessionDescription(sig.payload.sdp));
+          var pendIn = pc._pendingIce || []; pc._pendingIce = [];
+          for (var pi = 0; pi < pendIn.length; pi++) { try { await pc.addIceCandidate(new RTCIceCandidate(pendIn[pi])); } catch (e) {} }
           var answer = await pc.createAnswer();
           await pc.setLocalDescription(answer);
           await liveApi("/api/app/live/signal", {
@@ -1444,6 +1459,8 @@ export const LIVE_CLASS_JS = String.raw`
           var outPc = liveState.outPeers[sig.from];
           if (outPc && outPc.signalingState === "have-local-offer") {
             await outPc.setRemoteDescription(new RTCSessionDescription(sig.payload.sdp));
+            var pendOut = outPc._pendingIce || []; outPc._pendingIce = [];
+            for (var po = 0; po < pendOut.length; po++) { try { await outPc.addIceCandidate(new RTCIceCandidate(pendOut[po])); } catch (e) {} }
           }
           return;
         }
@@ -1451,13 +1468,23 @@ export const LIVE_CLASS_JS = String.raw`
         if (sig.kind === "ice" && sig.payload && sig.payload.candidate) {
           if (sig.payload.dir === "from-broadcaster") {
             var inPc = liveState.inPeers[sig.from];
-            if (inPc && inPc.remoteDescription) {
-              await inPc.addIceCandidate(new RTCIceCandidate(sig.payload.candidate)).catch(function() {});
+            if (inPc) {
+              if (inPc.remoteDescription) {
+                await inPc.addIceCandidate(new RTCIceCandidate(sig.payload.candidate)).catch(function() {});
+              } else {
+                inPc._pendingIce = inPc._pendingIce || [];
+                inPc._pendingIce.push(sig.payload.candidate);
+              }
             }
           } else {
             var oPc = liveState.outPeers[sig.from];
-            if (oPc && oPc.remoteDescription) {
-              await oPc.addIceCandidate(new RTCIceCandidate(sig.payload.candidate)).catch(function() {});
+            if (oPc) {
+              if (oPc.remoteDescription) {
+                await oPc.addIceCandidate(new RTCIceCandidate(sig.payload.candidate)).catch(function() {});
+              } else {
+                oPc._pendingIce = oPc._pendingIce || [];
+                oPc._pendingIce.push(sig.payload.candidate);
+              }
             }
           }
         }
@@ -1504,17 +1531,21 @@ export const LIVE_CLASS_JS = String.raw`
         return;
       }
 
+      // نمای پایدار کاشی‌ها + پخش تضمینی (رفع صفحه سیاه در اندروید WebView)
+      if (!grid.dataset) { try { grid.dataset = {}; } catch (e) {} }
       var sigKeys = tiles.map(function(t) { return t.key + ":" + t.kind; }).join("|");
       if (grid.dataset.tileSig !== sigKeys) {
         grid.dataset.tileSig = sigKeys;
         grid.innerHTML = tiles.map(function(t) {
+          var startMuted = t.muted ? true : !window._liveSoundOn;
           var audioPlaceholder = t.kind === "audio"
             ? '<div style="text-align:center;padding:24px;"><div style="font-size:34px;">🎙🔊</div><div style="font-weight:800;margin-top:6px;color:#6EE7B7;">پخش زنده صوتی فعال</div></div>'
             : '';
-          return '<div class="live-video-tile">' +
+          return '<div class="live-video-tile" style="position:relative;">' +
             audioPlaceholder +
-            '<video id="vid_' + t.key + '" autoplay playsinline ' + (t.muted ? 'muted' : '') + ' style="' + (t.kind === 'audio' ? 'width:1px;height:1px;opacity:0;position:absolute;' : '') + '"></video>' +
+            '<video id="vid_' + t.key + '" autoplay playsinline ' + (startMuted ? 'muted' : '') + ' style="' + (t.kind === 'audio' ? 'width:1px;height:1px;opacity:0;position:absolute;' : '') + '"></video>' +
             '<div class="live-video-badge" id="vbadge_' + t.key + '">' + esc(t.label) + '</div>' +
+            '<button id="vtap_' + t.key + '" onclick="tapPlayLiveTile(this.id.slice(4))" style="display:none;position:absolute;left:0;top:0;right:0;bottom:0;width:100%;background:rgba(2,6,23,0.5);border:none;color:#F8FAFC;font-size:14px;font-weight:800;cursor:pointer;border-radius:12px;">▶️ لمس برای پخش زنده</button>' +
           '</div>';
         }).join("");
       }
@@ -1523,10 +1554,60 @@ export const LIVE_CLASS_JS = String.raw`
         var bEl = document.getElementById("vbadge_" + t.key);
         if (bEl) bEl.textContent = t.label;
         var vEl = document.getElementById("vid_" + t.key);
-        if (vEl && vEl.srcObject !== t.stream) {
-          vEl.srcObject = t.stream;
-          vEl.play().catch(function() {});
+        if (!vEl) return;
+        var wantMuted = t.muted ? true : !window._liveSoundOn;
+        try { if (vEl.muted !== wantMuted) vEl.muted = wantMuted; } catch (e) {}
+        if (vEl.srcObject !== t.stream) {
+          try { vEl.srcObject = t.stream; } catch (e) {}
+        }
+        var playPromise = null;
+        try { if (vEl.paused && vEl.play) playPromise = vEl.play(); } catch (e) {}
+        if (playPromise && playPromise.catch) {
+          playPromise.catch(function() {
+            // مرورگر پخش خودکار با صدا را بلاک کرد — حداقل بی‌صدا پخش شود تا هرگز صفحه سیاه نماند
+            try { vEl.muted = true; } catch (e) {}
+            var p2 = null;
+            try { if (vEl.play) p2 = vEl.play(); } catch (e) {}
+            if (p2 && p2.catch) p2.catch(function() {});
+            var tap = document.getElementById("vtap_" + t.key);
+            if (tap) tap.style.display = "block";
+          });
         }
       });
+
+      var anyRem = false;
+      for (var ti = 0; ti < tiles.length; ti++) {
+        if (tiles[ti].key !== "local_self") { anyRem = true; break; }
+      }
+      var sb = document.getElementById("liveSoundBtn");
+      if (sb) {
+        try { sb.style.display = anyRem ? "inline-flex" : "none"; } catch (e) {}
+        sb.textContent = window._liveSoundOn ? "🔇 قطع صدای کلاس" : "🔈 روشن کردن صدای کلاس";
+      }
+      var sh = document.getElementById("liveSoundHint");
+      if (sh) {
+        try { sh.style.display = (anyRem && !window._liveSoundOn) ? "inline" : "none"; } catch (e) {}
+      }
+    }
+
+    function tapPlayLiveTile(key) {
+      var vEl = document.getElementById("vid_" + key);
+      window._liveSoundOn = true;
+      if (vEl) {
+        try { vEl.muted = false; } catch (e) {}
+        var p = null;
+        try { if (vEl.play) p = vEl.play(); } catch (e) {}
+        if (p && p.catch) p.catch(function() {});
+      }
+      var tap = document.getElementById("vtap_" + key);
+      if (tap) tap.style.display = "none";
+      var sb = document.getElementById("liveSoundBtn");
+      if (sb) sb.textContent = "🔇 قطع صدای کلاس";
+    }
+
+    function toggleLiveSound() {
+      window._liveSoundOn = !window._liveSoundOn;
+      refreshVideoTilesDom();
+      showToast(window._liveSoundOn ? "🔊 صدای کلاس روشن شد" : "🔇 صدای کلاس قطع شد");
     }
 `;

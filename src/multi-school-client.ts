@@ -1421,6 +1421,65 @@ const SCHOOL_JS = String.raw`
     var hwView = { assignmentId: -1 };
     var hwPhotos = {};
     var hwVideos = {};
+    var hwAudios = {};
+    var hwFreeAudio = "";
+    var voiceRec = { rec: null, chunks: [], scope: "", id: 0 };
+    function toggleVoiceRec(scope, id) {
+      try {
+        if (voiceRec.rec && voiceRec.rec.state === "recording") { voiceRec.rec.stop(); return; }
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return showToast("ضبط صوت در این دستگاه پشتیبانی نمی‌شود — فایل ویس بفرستید");
+        navigator.mediaDevices.getUserMedia({ audio: true }).then(function (stream) {
+          var rec = new MediaRecorder(stream);
+          voiceRec.rec = rec; voiceRec.chunks = []; voiceRec.scope = scope; voiceRec.id = id;
+          rec.ondataavailable = function (e) { if (e.data && e.data.size) voiceRec.chunks.push(e.data); };
+          rec.onstop = function () {
+            try { stream.getTracks().forEach(function (t) { t.stop(); }); } catch (e) {}
+            var blob = new Blob(voiceRec.chunks, { type: "audio/webm" });
+            var reader = new FileReader();
+            reader.onload = function () {
+              var dataUrl = String(reader.result || "");
+              if (voiceRec.scope === "free") {
+                hwFreeAudio = dataUrl;
+                var pv = document.getElementById("hwFreeAudPrev");
+                if (pv) { pv.src = dataUrl; pv.style.display = "inline-block"; }
+              } else {
+                hwAudios[voiceRec.id] = dataUrl;
+                var pv2 = document.getElementById("hwAudPrev_" + voiceRec.id);
+                if (pv2) { pv2.src = dataUrl; pv2.style.display = "inline-block"; }
+              }
+              showToast("✅ ویس ضبط شد — با «ارسال تکلیف» فرستاده می‌شود");
+            };
+            reader.readAsDataURL(blob);
+          };
+          rec.start();
+          showToast("⏺ در حال ضبط ویس... برای پایان، دوباره بزنید");
+        }).catch(function () { showToast("دسترسی به میکروفون ممکن نشد"); });
+      } catch (e) { showToast("❌ " + e.message); }
+    }
+    function readAudioFile(input, cb) {
+      var f = input.files && input.files[0];
+      if (!f) return;
+      if (f.size > 2300000) { showToast("حجم ویس زیاد است (حداکثر ۲ مگابایت)"); input.value = ""; return; }
+      var reader = new FileReader();
+      reader.onload = function () { cb(String(reader.result || "")); };
+      reader.readAsDataURL(f);
+    }
+    function pickHwAudio(aid, input) {
+      readAudioFile(input, function (r) {
+        hwAudios[aid] = r;
+        var pv = document.getElementById("hwAudPrev_" + aid);
+        if (pv) { pv.src = r; pv.style.display = "inline-block"; }
+        showToast("✅ ویس انتخاب شد");
+      });
+    }
+    function pickHwFreeAudio(input) {
+      readAudioFile(input, function (r) {
+        hwFreeAudio = r;
+        var pv = document.getElementById("hwFreeAudPrev");
+        if (pv) { pv.src = r; pv.style.display = "inline-block"; }
+        showToast("✅ ویس انتخاب شد");
+      });
+    }
     var hwFreeVideo = "";
     var aiHistory = [];
     var quizState = { topic: "", questions: [], answers: [] };
@@ -1514,6 +1573,9 @@ const SCHOOL_JS = String.raw`
                 '<label class="btn btn-ghost btn-sm" style="cursor:pointer;">📷 انتخاب عکس<input type="file" accept="image/*" style="display:none;" onchange="pickHwFreePhoto(this)" /></label>' +
                 '<label class="btn btn-ghost btn-sm" style="cursor:pointer;">📁 ویدیو<input type="file" accept="video/*" style="display:none;" onchange="pickHwFreeVideo(this)" /></label>' +
                 '<button type="button" class="btn btn-ghost btn-sm" onclick="recordHwFreeVideo()">🎥 ضبط ویدیو</button>' +
+                '<button type="button" class="btn btn-ghost btn-sm" onclick="toggleVoiceRec(\'free\', 0)">🎤 ضبط ویس</button>' +
+                '<label class="btn btn-ghost btn-sm" style="cursor:pointer;">🎧 فایل ویس<input type="file" accept="audio/*" style="display:none;" onchange="pickHwFreeAudio(this)" /></label>' +
+                '<audio id="hwFreeAudPrev" controls style="display:none;max-width:100%;height:36px;"></audio>' +
                 '<video id="hwFreeVidPrev" controls style="display:none;max-width:100%;max-height:150px;border-radius:9px;"></video>' +
                 '<img id="hwFreePrev" src="" style="display:none;width:64px;height:64px;object-fit:cover;border-radius:9px;border:1px solid var(--border);cursor:pointer;" onclick="viewPhoto(this.src)" />' +
                 '<button class="btn btn-emerald btn-sm" style="margin-right:auto;" onclick="submitFreeHw()">📤 ارسال به معلم</button>' +
@@ -1530,6 +1592,7 @@ const SCHOOL_JS = String.raw`
                 (x.text ? '<div style="padding:8px 10px;background:var(--surface-2);border-radius:11px;font-size:12.5px;">' + esc(x.text) + '</div>' : '') +
                 (x.photo ? '<img src="' + x.photo + '" style="width:100%;max-height:220px;object-fit:contain;border-radius:11px;cursor:pointer;margin:6px 0;" onclick="viewPhoto(this.src)" />' : '') +
                 (x.video ? '<video src="' + x.video + '" controls style="width:100%;max-height:220px;border-radius:11px;margin:6px 0;"></video>' : '') +
+              (x.audio ? '<audio src="' + x.audio + '" controls style="width:100%;height:40px;margin:6px 0;"></audio>' : '') +
                 '<div class="muted" style="font-size:11px;">🗓 ' + esc(x.createdAt) + '</div>' +
               '</div>';
             }).join("")
@@ -1557,6 +1620,9 @@ const SCHOOL_JS = String.raw`
                     '<label class="btn btn-ghost btn-sm" style="cursor:pointer;">📷 انتخاب عکس<input type="file" accept="image/*" style="display:none;" onchange="pickHwPhoto(' + a.id + ', this)" /></label>' +
                     '<label class="btn btn-ghost btn-sm" style="cursor:pointer;">📁 ویدیو<input type="file" accept="video/*" style="display:none;" onchange="pickHwVideo(' + a.id + ', this)" /></label>' +
                     '<button type="button" class="btn btn-ghost btn-sm" onclick="recordHwVideo(' + a.id + ')">🎥 ضبط ویدیو</button>' +
+                    '<button type="button" class="btn btn-ghost btn-sm" onclick="toggleVoiceRec(\'asg\',' + a.id + ')">🎤 ضبط ویس</button>' +
+                    '<label class="btn btn-ghost btn-sm" style="cursor:pointer;">🎧 ویس<input type="file" accept="audio/*" style="display:none;" onchange="pickHwAudio(' + a.id + ', this)" /></label>' +
+                    '<audio id="hwAudPrev_' + a.id + '" controls src="' + (sub && sub.audio ? sub.audio : "") + '" style="display:' + (sub && sub.audio ? "inline-block" : "none") + ';max-width:100%;height:36px;"></audio>' +
                     '<video id="hwVidPrev_' + a.id + '" controls src="' + (sub && sub.video ? sub.video : "") + '" style="display:' + (sub && sub.video ? "inline-block" : "none") + ';max-width:100%;max-height:150px;border-radius:9px;"></video>' +
                     '<img id="hwPrev_' + a.id + '" src="" style="display:' + (sub && sub.photo ? "inline-block" : "none") + ';width:64px;height:64px;object-fit:cover;border-radius:9px;border:1px solid var(--border);cursor:pointer;" onclick="viewPhoto(this.src)" />' +
                     '<button class="btn btn-emerald btn-sm" style="margin-right:auto;" onclick="submitHw(' + a.id + ')">📤 ' + (sub ? "ویرایش ارسال" : "ارسال تکلیف") + '</button>' +
@@ -1564,9 +1630,10 @@ const SCHOOL_JS = String.raw`
                 if (sub && sub.photo) {
                   formHtml = formHtml.replace('src=""', 'src="' + sub.photo + '"');
                 }
-              } else if (sub && (sub.photo || sub.video)) {
+              } else if (sub && (sub.photo || sub.video || sub.audio)) {
                 formHtml = (sub.photo ? '<img src="' + sub.photo + '" style="width:100%;max-height:220px;object-fit:contain;border-radius:11px;cursor:pointer;" onclick="viewPhoto(this.src)" />' : "") +
-                  (sub.video ? '<video src="' + sub.video + '" controls style="width:100%;max-height:220px;border-radius:11px;margin:6px 0;"></video>' : "");
+                  (sub.video ? '<video src="' + sub.video + '" controls style="width:100%;max-height:220px;border-radius:11px;margin:6px 0;"></video>' : "") +
+                  (sub.audio ? '<audio src="' + sub.audio + '" controls style="width:100%;height:40px;margin:6px 0;"></audio>' : "");
               }
               return '<div class="card">' +
                 '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">' +
@@ -1615,10 +1682,11 @@ const SCHOOL_JS = String.raw`
     async function submitFreeHw() {
       try {
         var txt = (document.getElementById("hwFreeText") || {}).value || "";
-        if (!txt.trim() && !hwFreePhoto && !hwFreeVideo) return showToast("متن یا عکس یا ویدیوی تکلیف را وارد کنید");
-        await api("/api/ms/student/hw/send", { text: txt.trim(), photo: hwFreePhoto, video: hwFreeVideo });
+        if (!txt.trim() && !hwFreePhoto && !hwFreeVideo && !hwFreeAudio) return showToast("متن یا عکس یا ویدیو یا ویس تکلیف را وارد کنید");
+        await api("/api/ms/student/hw/send", { text: txt.trim(), photo: hwFreePhoto, video: hwFreeVideo, audio: hwFreeAudio });
         hwFreePhoto = "";
         hwFreeVideo = "";
+        hwFreeAudio = "";
         showToast("✅ تکلیف برای معلم ارسال شد");
         renderApp();
       } catch (e) { showToast("❌ " + e.message); }
@@ -1627,9 +1695,10 @@ const SCHOOL_JS = String.raw`
     async function submitHw(aid) {
       try {
         var txt = (document.getElementById("hwText_" + aid) || {}).value || "";
-        await api("/api/ms/student/submit", { assignmentId: aid, text: txt.trim(), photo: hwPhotos[aid] || "", video: hwVideos[aid] || "" });
+        await api("/api/ms/student/submit", { assignmentId: aid, text: txt.trim(), photo: hwPhotos[aid] || "", video: hwVideos[aid] || "", audio: hwAudios[aid] || "" });
         hwPhotos[aid] = "";
         hwVideos[aid] = "";
+        hwAudios[aid] = "";
         showToast("✅ تکلیف ارسال شد.");
         renderApp();
       } catch (e) { showToast("❌ " + e.message); }
@@ -1749,6 +1818,7 @@ const SCHOOL_JS = String.raw`
                 (s.text ? '<div style="margin:7px 0;padding:9px 11px;background:var(--surface-2);border-radius:11px;font-size:13px;">' + esc(s.text) + '</div>' : '') +
                 (s.photo ? '<img src="' + s.photo + '" style="width:100%;max-height:230px;object-fit:contain;border-radius:11px;cursor:pointer;margin:6px 0;" onclick="viewPhoto(this.src)" />' : '') +
                 (s.video ? '<video src="' + s.video + '" controls style="width:100%;max-height:260px;border-radius:11px;margin:6px 0;"></video>' : '') +
+                (s.audio ? '<audio src="' + s.audio + '" controls style="width:100%;height:40px;margin:6px 0;"></audio>' : '') +
                 '<div style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap;">' +
                   '<input id="revScore_' + s.submissionId + '" class="input" type="number" step="0.25" dir="ltr" placeholder="نمره / امتیاز⭐" style="width:95px;margin:0;" value="' + (s.score !== null ? s.score : "") + '" />' +
                   '<input id="revFb_' + s.submissionId + '" class="input" placeholder="بازخورد معلم..." style="flex:1;min-width:150px;margin:0;" value="' + esc(s.feedback) + '" />' +
@@ -2902,6 +2972,7 @@ const SCHOOL_JS = String.raw`
               (x.text ? '<div style="margin:7px 0;padding:9px 11px;background:var(--surface-2);border-radius:11px;font-size:12.5px;">' + esc(x.text) + '</div>' : '') +
               (x.photo ? '<img src="' + x.photo + '" style="width:100%;max-height:220px;object-fit:contain;border-radius:11px;cursor:pointer;margin:6px 0;" onclick="viewPhoto(this.src)" />' : '') +
               (x.video ? '<video src="' + x.video + '" controls style="width:100%;max-height:220px;border-radius:11px;margin:6px 0;"></video>' : '') +
+              (x.audio ? '<audio src="' + x.audio + '" controls style="width:100%;height:40px;margin:6px 0;"></audio>' : '') +
               (Number(x.studentId) === 0 ? '<div style="margin:8px 0;display:flex;gap:6px;align-items:center;flex-wrap:wrap;"><span class="muted" style="font-size:11.5px;">👤 این تکلیف به دانش‌آموزی وصل نیست — انتخاب کنید:</span><select id="asgSel_' + x.submissionId + '" class="input" style="flex:1;min-width:170px;margin:0;"><option value="0">— انتخاب دانش‌آموز —</option>' + (rdata.roster || []).map(function (rr) { return '<option value="' + rr.id + '">' + esc(rr.name) + '</option>'; }).join("") + '</select></div>' : '') +
               '<div style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap;">' +
                 '<input id="revScore_' + x.submissionId + '" class="input" type="number" step="0.25" dir="ltr" placeholder="نمره / امتیاز⭐" style="width:95px;margin:0;" value="' + (x.score !== null ? x.score : "") + '" />' +

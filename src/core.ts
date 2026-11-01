@@ -61,6 +61,21 @@ interface QuizAnswer { id: number; quiz_id: number; user_id: number; name: strin
 async function getStudent(db: D1Database, userId: number): Promise<Student | null> { return await db.prepare("SELECT * FROM students WHERE user_id = ?").bind(userId).first<Student>(); }
 async function saveStudent(db: D1Database, userId: number, name: string, grade: string) {
   const joined = new Date().toISOString();
+  // یک ردیف به ازای هر نام: اکانت جدیدِ همان دانش‌آموز، ردیف قبلی را تصاحب می‌کند (بدون دانش‌آموز تکراری!)
+  try {
+    const norm = (x: string) => String(x || "").replace(/[\u200c\u200d\u200e\u200f]/g, "").replace(/\s+/g, "").trim();
+    const rows = ((await db.prepare("SELECT user_id, name FROM students").all()).results || []) as any[];
+    const nm = norm(name);
+    const hit = nm.length >= 3 ? rows.find((r: any) => norm(r.name) === nm) : null;
+    if (hit) {
+      if (Number(hit.user_id) === Number(userId)) {
+        await db.prepare("UPDATE students SET name = ?, grade = ? WHERE user_id = ?").bind(name, grade, userId).run();
+      } else {
+        await db.prepare("UPDATE students SET user_id = ?, name = ?, grade = ? WHERE user_id = ?").bind(userId, name, grade, Number(hit.user_id)).run();
+      }
+      return;
+    }
+  } catch (e) {}
   await db.prepare("INSERT INTO students (user_id, name, score, joined, level, grade) VALUES (?, ?, 0, ?, 1, ?) ON CONFLICT(user_id) DO UPDATE SET name = excluded.name, grade = excluded.grade").bind(userId, name, joined, grade).run();
 }
 async function updateScore(db: D1Database, userId: number, delta: number): Promise<Student | null> {
@@ -12207,8 +12222,14 @@ export default {
         } as any);
         if (handled) return new Response("ok");
       } catch (e) {}
-      const bot = createBot(env);
-      return webhookCallback(bot, "std/http")(request);
+      // همیشه 200 برگردان تا تلگرام آپدیت را دوباره نفرستد (علت تکرار پیام‌ها!)
+      try {
+        const bot = createBot(env);
+        await webhookCallback(bot, "std/http")(request);
+      } catch (e) {
+        try { console.log("legacy-bot error (ignored):", String(e).slice(0, 120)); } catch (e2) {}
+      }
+      return new Response("ok");
     }
     if (url.pathname === "/") return new Response(buildAppHtml(""), { headers: { "Content-Type": "text/html; charset=utf-8" } });
     return new Response("Not Found", { status: 404 });

@@ -265,7 +265,13 @@ export async function ensureSchoolTables(db: D1Database): Promise<void> {
       )`)
       .run();
     await db
-      .prepare(`CREATE TABLE IF NOT EXISTS ms_tg_msgmap (
+      .prepare(`CREATE TABLE IF NOT EXISTS ms_tg_seen (
+        update_id TEXT PRIMARY KEY,
+        ts TEXT
+      )`)
+      .run();
+  await db
+    .prepare(`CREATE TABLE IF NOT EXISTS ms_tg_msgmap (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         school_id INTEGER NOT NULL,
         kind TEXT NOT NULL,
@@ -286,6 +292,7 @@ export async function ensureSchoolTables(db: D1Database): Promise<void> {
       "ALTER TABLE ms_classes ADD COLUMN join_code TEXT DEFAULT ''",
       "ALTER TABLE ms_submissions ADD COLUMN video_b64 TEXT DEFAULT ''",
       "ALTER TABLE ms_submissions ADD COLUMN tg_from_id TEXT DEFAULT ''",
+      "ALTER TABLE ms_submissions ADD COLUMN audio_b64 TEXT DEFAULT ''",
     ]) {
       try {
         await db.prepare(alter).run();
@@ -489,8 +496,13 @@ export async function msTgNotifyTeachers(db: D1Database, deps: any, schoolId: nu
   try {
     const token = await msBotToken(db, deps, schoolId);
     const rows = await db.prepare("SELECT tg_id FROM ms_teachers WHERE school_id = ?").bind(schoolId).all();
+    const seenChats = new Set<string>();
     for (const r of ((rows.results || []) as any[])) {
-      if (r.tg_id) await msTgSend(token, r.tg_id, text, keyboard);
+      const chatT = String(r.tg_id || "");
+      if (chatT && !seenChats.has(chatT)) {
+        seenChats.add(chatT);
+        await msTgSend(token, chatT, text, keyboard);
+      }
     }
     if (!(((rows.results || []) as any[]).some((r: any) => r.tg_id))) {
       const s: any = await db.prepare("SELECT admin_tg_id FROM schools WHERE id = ?").bind(schoolId).first();
@@ -505,7 +517,7 @@ export async function msTgNotifyTeachersMapped(db: D1Database, deps: any, school
   try {
     const token = await msBotToken(db, deps, schoolId);
     const rows = await db.prepare("SELECT tg_id FROM ms_teachers WHERE school_id = ?").bind(schoolId).all();
-    const targets = ((rows.results || []) as any[]).map((r) => String(r.tg_id || "")).filter(Boolean);
+    const targets = Array.from(new Set(((rows.results || []) as any[]).map((r) => String(r.tg_id || "")).filter(Boolean)));
     if (!targets.length) {
       const sc: any = await db.prepare("SELECT admin_tg_id FROM schools WHERE id = ?").bind(schoolId).first();
       if (sc?.admin_tg_id) targets.push(String(sc.admin_tg_id));
@@ -662,9 +674,25 @@ export async function msTgNotifyStudent(db: D1Database, deps: any, schoolId: num
 
 // -------------------------------------------------
 // 🤖 پردازش آپدیت‌های تلگرام (کنترل از تلگرام + اتصال حساب‌ها)
+const msTgMediaGroupSeen = new Map<string, number>();
+
 export async function handleMsTgUpdate(update: any, db: D1Database, deps: any): Promise<boolean> {
   try {
     // ===== دکمه‌های تایید/رد (callback) =====
+    // ===== جلوگیری از پردازش تکراری (retry تلگرام = تکرار ردیف/اعلان‌ها!) =====
+    try {
+      const updKey = String(update?.update_id || "") || (update?.message && update.message.message_id ? String(update.message.from?.id || "") + ":" + String(update.message.message_id) : "");
+      if (updKey) {
+        const seenRow: any = await db.prepare("SELECT update_id FROM ms_tg_seen WHERE update_id = ?").bind(updKey).first();
+        if (seenRow) return false;
+        await db.prepare("INSERT OR IGNORE INTO ms_tg_seen (update_id, ts) VALUES (?, ?)").bind(updKey, new Date().toISOString()).run();
+        const cut = new Date(Date.now() - 2 * 3600 * 1000).toISOString();
+        await db.prepare("DELETE FROM ms_tg_seen WHERE ts < ?").bind(cut).run();
+      }
+    } catch (e) {
+      /* بی‌صدا */
+    }
+
     const cb = update?.callback_query;
     if (cb && String(cb.data || "").startsWith("ms:ap:")) {
       const parts = String(cb.data).split(":");
@@ -811,7 +839,9 @@ export async function handleMsTgUpdate(update: any, db: D1Database, deps: any): 
     const imgDoc = msg.document && String(msg.document.mime_type || "").startsWith("image/") ? msg.document : null;
     const isPhotoMsg = (Array.isArray(msg.photo) && msg.photo.length > 0) || Boolean(imgDoc);
     const vidObj = msg.video || (msg.document && String(msg.document.mime_type || "").startsWith("video/") ? msg.document : null);
-    if (isPhotoMsg || vidObj) {
+    const audioObj = (msg as any).voice || (msg as any).audio || null;
+    const isTextHw = Boolean(text && !text.startsWith("/"));
+    if (isPhotoMsg || vidObj || audioObj || isTextHw) {
       try {
         // ===== شناسایی فرستنده (پیام فورواردی = فرستنده اصلی) =====
         const fwdUser: any = (msg as any).forward_from || ((msg as any).forward_origin && (msg as any).forward_origin.sender_user) || null;
@@ -866,10 +896,19 @@ export async function handleMsTgUpdate(update: any, db: D1Database, deps: any): 
             }
             return btoa(bin);
           };
-          const tgNotifyHwReview = async (subId: number, capText: string, mediaKind: "photo" | "video", fileId: string) => {
+          const mgKey = String((msg as any).media_group_id || "");
+          const mgShouldNotify = (): boolean => {
+            if (!mgKey) return true;
+            if (msTgMediaGroupSeen.has(mgKey)) return false;
+            msTgMediaGroupSeen.set(mgKey, Date.now());
+            return true;
+          };
+          const tgNotifyHwReview = async (subId: number, capText: string, mediaKind: "photo" | "video" | "audio" | "text", fileId: string): Promise<boolean> => {
+            let sentAny = false;
             try {
+              if (!mgShouldNotify()) return true;
               const rowsT = await db.prepare("SELECT tg_id FROM ms_teachers WHERE school_id = ?").bind(msSchool).all();
-              let targets = ((rowsT.results || []) as any[]).map((r) => String(r.tg_id || "")).filter(Boolean);
+              let targets = Array.from(new Set(((rowsT.results || []) as any[]).map((r) => String(r.tg_id || "")).filter(Boolean)));
               if (!targets.length) {
                 const sc: any = await db.prepare("SELECT admin_tg_id FROM schools WHERE id = ?").bind(msSchool).first();
                 if (sc?.admin_tg_id) targets.push(String(sc.admin_tg_id));
@@ -880,19 +919,27 @@ export async function handleMsTgUpdate(update: any, db: D1Database, deps: any): 
               ]];
               for (const chatIdT of targets) {
                 try {
-                  const rv = await fetch(`https://api.telegram.org/bot${msToken}/${mediaKind === "video" ? "sendVideo" : "sendPhoto"}`, {
+                  const method = mediaKind === "video" ? "sendVideo" : mediaKind === "audio" ? "sendVoice" : mediaKind === "text" ? "sendMessage" : "sendPhoto";
+                  const nameRef = st ? st.name : String(senderName || "").trim() || "ناشناس";
+                  const payload: any = { chat_id: chatIdT, reply_markup: { inline_keyboard: kb } };
+                  if (mediaKind === "video") payload.video = fileId;
+                  else if (mediaKind === "audio") payload.voice = fileId;
+                  else if (mediaKind === "photo") payload.photo = fileId;
+                  if (mediaKind === "text") {
+                    payload.text = "📝 تکلیف متنی " + nameRef + ":\n" + String(capText || "").slice(0, 700) + "\n— برای تایید/رد دکمه‌ها را بزنید";
+                  } else {
+                    
+                    payload.caption = `${mediaKind === "video" ? "🎥 ویدیو" : mediaKind === "audio" ? "🎤 پیام صوتی" : "📷 عکس"} تکلیف ${nameRef}${capText ? " — " + capText : ""} — برای تایید/رد دکمه‌ها را بزنید`;
+                  }
+                  const rv = await fetch(`https://api.telegram.org/bot${msToken}/${method}`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                      chat_id: chatIdT,
-                      ...(mediaKind === "video" ? { video: fileId } : { photo: fileId }),
-                      caption: `${mediaKind === "video" ? "🎥 ویدیو" : "📷 عکس"} تکلیف ${st ? st.name : String(senderName || "").trim() || "ناشناس"}${capText ? " — " + capText : ""} — برای تایید/رد دکمه‌ها را بزنید`,
-                      reply_markup: { inline_keyboard: kb },
-                    }),
+                    body: JSON.stringify(payload),
                   });
                   const jv: any = await rv.json().catch(() => ({}));
                   const msgIdV = Number(jv?.result?.message_id || 0);
                   if (msgIdV) {
+                    sentAny = true;
                     await db
                       .prepare("INSERT INTO ms_tg_msgmap (school_id, kind, ref_id, chat_id, tg_msg_id, created_at) VALUES (?, 'hw', ?, ?, ?, ?)")
                       .bind(msSchool, subId, chatIdT, String(msgIdV), nowIso())
@@ -905,10 +952,12 @@ export async function handleMsTgUpdate(update: any, db: D1Database, deps: any): 
             } catch (e) {
               /* بی‌صدا */
             }
+            return sentAny;
           };
           const whoPre = st ? "" : "👤 " + (String(senderName || "").trim() || "کاربر " + (senderId || "ناشناس")) + " (⚠️ شناسایی‌نشده) — ";
           const notifyUnassigned = async (): Promise<void> => {
             if (st) return;
+            if (!mgShouldNotify()) return;
             await msTgNotifyTeachers(db, deps, msSchool, "⚠️ تکلیف تلگرامی از «" + (String(senderName || "").trim() || senderId) + "» ثبت شد ولی دانش‌آموز شناسایی نشد. از «صندوق ورودی» در اپ، آن را به دانش‌آموز وصل کنید.");
           };
           if (vidObj) {
@@ -922,7 +971,11 @@ export async function handleMsTgUpdate(update: any, db: D1Database, deps: any): 
                 .bind(msSchool, Number(st ? st.id : 0), Number(st ? st.class_id : 0), whoPre + (capV ? "🎥 " + capV : "🎥 ویدیو (از تلگرام)"), video, nowIso(), senderId)
                 .run();
               const subId = Number(resV?.meta?.last_row_id || 0);
-              if (subId) { await tgNotifyHwReview(subId, capV, "video", vfId); await notifyUnassigned(); }
+              if (subId) {
+                const okN = await tgNotifyHwReview(subId, capV, "video", vfId);
+                await notifyUnassigned();
+                if (okN) return true;
+              }
             } else {
               await msTgSend(msToken, chatId, "⚠️ حجم ویدیو زیاد است (حداکثر ۲ مگابایت). لطفاً ویدیوی کوتاه‌تری بفرستید یا از پنل وب ارسال کنید.");
             }
@@ -941,9 +994,48 @@ export async function handleMsTgUpdate(update: any, db: D1Database, deps: any): 
                 .bind(msSchool, Number(st ? st.id : 0), Number(st ? st.class_id : 0), whoPre + (capP ? "📷 " + capP : "📷 تکلیف عکس (از تلگرام)"), photo, nowIso(), senderId)
                 .run();
               const subId = Number(resP?.meta?.last_row_id || 0);
-              if (subId) { await tgNotifyHwReview(subId, capP, "photo", String(pick.file_id || "")); await notifyUnassigned(); }
+              if (subId) {
+                const okN = await tgNotifyHwReview(subId, capP, "photo", String(pick.file_id || ""));
+                await notifyUnassigned();
+                if (okN) return true;
+              }
             } else {
               await msTgSend(msToken, chatId, "⚠️ حجم عکس زیاد است (حداکثر ۹۰۰ کیلوبایت). لطفاً عکس کم‌حجم‌تری بفرستید یا از پنل وب ارسال کنید.");
+            }
+          }
+          // ===== پیام صوتی (ویس) از تلگرام =====
+          if (audioObj) {
+            const afId = String(audioObj.file_id || "");
+            const abuf = await dl(afId);
+            const capA = String((msg as any).caption || "").trim().slice(0, 300);
+            if (abuf.length > 0 && abuf.length <= 2200000) {
+              const audio = "data:audio/ogg;base64," + toB64(abuf);
+              const resA: any = await db
+                .prepare("INSERT INTO ms_submissions (school_id, assignment_id, student_id, class_id, text, audio_b64, late, created_at, tg_from_id) VALUES (?, 0, ?, ?, ?, ?, 0, ?, ?)")
+                .bind(msSchool, Number(st ? st.id : 0), Number(st ? st.class_id : 0), whoPre + "🎤 پیام صوتی (از تلگرام)" + (capA ? " — " + capA : ""), audio, nowIso(), senderId)
+                .run();
+              const subId = Number(resA?.meta?.last_row_id || 0);
+              if (subId) {
+                const okN = await tgNotifyHwReview(subId, capA, "audio", afId);
+                await notifyUnassigned();
+                if (okN) return true;
+              }
+            } else {
+              await msTgSend(msToken, chatId, "⚠️ حجم پیام صوتی زیاد است (حداکثر ۲ مگابایت).");
+            }
+            return true;
+          }
+          // ===== تکلیف متنی از تلگرام =====
+          if (isTextHw && !isPhotoMsg && !vidObj && !audioObj) {
+            const resT: any = await db
+              .prepare("INSERT INTO ms_submissions (school_id, assignment_id, student_id, class_id, text, late, created_at, tg_from_id) VALUES (?, 0, ?, ?, ?, 0, ?, ?)")
+              .bind(msSchool, Number(st ? st.id : 0), Number(st ? st.class_id : 0), whoPre + "📝 متن تکلیف (از تلگرام): " + text.slice(0, 1500), nowIso(), senderId)
+              .run();
+            const subId = Number(resT?.meta?.last_row_id || 0);
+            if (subId) {
+              const okN = await tgNotifyHwReview(subId, text.slice(0, 300), "text", "");
+              await notifyUnassigned();
+              if (okN) return true;
             }
           }
         }
@@ -1862,19 +1954,22 @@ export async function handleMultiSchoolRequest(
     const text = String(body.text || "").trim().slice(0, 4000);
     const photo = String(body.photo || "");
     const video = String(body.video || "");
+    const audio = String(body.audio || "");
     if (photo && !photo.startsWith("data:image/")) return jsonOut({ error: "عکس نامعتبر است." }, 400);
     if (photo.length > 900000) return jsonOut({ error: "حجم عکس زیاد است (حداکثر ۹۰۰KB)." }, 400);
     if (video && (!video.startsWith("data:video/") || video.length > 2700000))
       return jsonOut({ error: "ویدیو نامعتبر یا حجمش زیاد است (حداکثر ۲ مگابایت — ویدیوی کوتاه بفرستید)." }, 400);
-    if (!text && !photo && !video) return jsonOut({ error: "متن یا عکس یا ویدیوی تکلیف را وارد کنید." }, 400);
+    if (audio && (!audio.startsWith("data:audio/") || audio.length > 2700000))
+      return jsonOut({ error: "ویس نامعتبر یا حجمش زیاد است (حداکثر ۲ مگابایت)." }, 400);
+    if (!text && !photo && !video && !audio) return jsonOut({ error: "متن یا عکس یا ویدیو یا ویس تکلیف را وارد کنید." }, 400);
     const stId = Number(tok.studentId || 0);
     const st: any = await db.prepare("SELECT * FROM ms_students WHERE id = ? AND school_id = ?").bind(stId, schoolId).first();
     if (!st) return jsonOut({ error: "دانش‌آموز یافت نشد." }, 404);
     const result = await db
-      .prepare("INSERT INTO ms_submissions (school_id, assignment_id, student_id, class_id, text, photo_b64, video_b64, late, created_at) VALUES (?, 0, ?, ?, ?, ?, ?, 0, ?)")
-      .bind(schoolId, stId, Number(st.class_id), text, photo, video, nowIso())
+      .prepare("INSERT INTO ms_submissions (school_id, assignment_id, student_id, class_id, text, photo_b64, video_b64, audio_b64, late, created_at) VALUES (?, 0, ?, ?, ?, ?, ?, ?, 0, ?)")
+      .bind(schoolId, stId, Number(st.class_id), text, photo, video, audio, nowIso())
       .run();
-    await msTgNotifyTeachers(db, deps, schoolId, `📤 تکلیف جدید از ${st.name}\n${text ? "📝 " + text.slice(0, 120) : "📷 عکس پیوست است"}`);
+    await msTgNotifyTeachers(db, deps, schoolId, `📤 تکلیف جدید از ${st.name}\n${text ? "📝 " + text.slice(0, 120) : photo ? "📷 عکس پیوست است" : audio ? "🎤 ویس پیوست است" : "🎥 ویدیو پیوست است"}`);
     return jsonOut({ ok: true, id: Number((result as any)?.meta?.last_row_id || 0) });
   }
 
@@ -2082,6 +2177,7 @@ export async function handleMultiSchoolRequest(
             text: s.text,
             photo: s.photo_b64 || "",
             video: s.video_b64 || "",
+            audio: s.audio_b64 || "",
             score: s.score !== null && s.score !== undefined ? Number(s.score) : null,
             feedback: s.feedback || "",
             reviewed: Boolean(s.reviewed_at),
@@ -2609,6 +2705,7 @@ export async function handleMultiSchoolRequest(
         text: s.text,
         photo: s.photo_b64 || "",
             video: s.video_b64 || "",
+            audio: s.audio_b64 || "",
         late: Number(s.late) === 1,
         score: s.score !== null && s.score !== undefined ? Number(s.score) : null,
         feedback: s.feedback || "",
@@ -2632,6 +2729,7 @@ export async function handleMultiSchoolRequest(
                 text: s.text,
                 photo: s.photo_b64 || "",
             video: s.video_b64 || "",
+            audio: s.audio_b64 || "",
                 late: Number(s.late) === 1,
                 score: s.score !== null && s.score !== undefined ? Number(s.score) : null,
                 feedback: s.feedback || "",
@@ -2664,7 +2762,10 @@ export async function handleMultiSchoolRequest(
     const video = String(body.video || "").trim();
     if (video && (!video.startsWith("data:video/") || video.length > 2700000))
       return jsonOut({ error: "ویدیو نامعتبر یا حجمش زیاد است (حداکثر ۲ مگابایت — ویدیوی کوتاه بفرستید)." }, 400);
-    if (!text && !photo && !video) return jsonOut({ error: "متن یا تصویر یا ویدیوی تکلیف را وارد کنید." }, 400);
+    const audio = String(body.audio || "").trim();
+    if (audio && (!audio.startsWith("data:audio/") || audio.length > 2700000))
+      return jsonOut({ error: "ویس نامعتبر یا حجمش زیاد است (حداکثر ۲ مگابایت)." }, 400);
+    if (!text && !photo && !video && !audio) return jsonOut({ error: "متن یا تصویر یا ویدیو یا ویس تکلیف را وارد کنید." }, 400);
     const existing: any = await db
       .prepare("SELECT * FROM ms_submissions WHERE assignment_id = ? AND student_id = ?")
       .bind(aid, stId)
@@ -2673,15 +2774,15 @@ export async function handleMultiSchoolRequest(
     const late = a.due_date && todayStr() > String(a.due_date) ? 1 : 0;
     if (existing) {
       await db
-        .prepare("UPDATE ms_submissions SET text = ?, photo_b64 = ?, video_b64 = ?, late = ?, created_at = ?, reviewed_at = NULL WHERE id = ?")
-        .bind(text, photo || String(existing.photo_b64 || ""), video || String(existing.video_b64 || ""), late, nowIso(), Number(existing.id))
+        .prepare("UPDATE ms_submissions SET text = ?, photo_b64 = ?, video_b64 = ?, audio_b64 = ?, late = ?, created_at = ?, reviewed_at = NULL WHERE id = ?")
+        .bind(text, photo || String(existing.photo_b64 || ""), video || String(existing.video_b64 || ""), audio || String((existing as any).audio_b64 || ""), late, nowIso(), Number(existing.id))
         .run();
     } else {
       await db
         .prepare(
-          "INSERT INTO ms_submissions (school_id, assignment_id, student_id, class_id, text, photo_b64, video_b64, late, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+          "INSERT INTO ms_submissions (school_id, assignment_id, student_id, class_id, text, photo_b64, video_b64, audio_b64, late, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         )
-        .bind(schoolId, aid, stId, Number(a.class_id), text, photo, video, late, nowIso())
+        .bind(schoolId, aid, stId, Number(a.class_id), text, photo, video, audio, late, nowIso())
         .run();
     }
     await msTgNotifyTeachers(db, deps, schoolId, `${wasReviewed ? "🔄 ارسال مجدد" : "📤"} تکلیف «${a.title}» از ${st.name} ارسال شد${late ? " (با تأخیر)" : ""}`);
@@ -3617,6 +3718,7 @@ export async function handleMultiSchoolRequest(
       text: String(s2.text || "").slice(0, 60),
       hasPhoto: Boolean(s2.photo_b64),
       hasVideo: Boolean(s2.video_b64),
+      hasAudio: Boolean((s2 as any).audio_b64),
       date: String(s2.created_at || "").split("T")[0],
     }));
     return jsonOut({
@@ -3707,6 +3809,49 @@ export async function handleMultiSchoolRequest(
       return jsonOut({ ok: true });
     }
     return jsonOut({ error: "نوع نامعتبر." }, 400);
+  }
+
+  if (path === "/api/ms/admin/merge-legacy-duplicates" && request.method === "POST" && (isAdmin || isSuper)) {
+    // ادغام دانش‌آموزان تکراری تلگرام (چند اکانت با یک نام) → فقط یک ردیف به ازای هر نام
+    const normL = (x: string): string => String(x || "").replace(/[\u200c\u200d\u200e\u200f]/g, "").replace(/\s+/g, "").trim();
+    const allRows = ((await db.prepare("SELECT user_id, name, score FROM students").all()).results || []) as any[];
+    const msTgs = new Set(((await db.prepare("SELECT tg_id FROM ms_students WHERE tg_id != ''").all()).results || []).map((m: any) => String(m.tg_id || "")));
+    const groups = new Map<string, any[]>();
+    for (const r of allRows) {
+      const k = normL(r.name);
+      if (k.length < 3) continue;
+      if (!groups.has(k)) groups.set(k, []);
+      groups.get(k)!.push(r);
+    }
+    let merged = 0;
+    let removed = 0;
+    for (const [k, g] of groups) {
+      if (g.length < 2) continue;
+      g.sort((a, b) => {
+        const pa = msTgs.has(String(a.user_id)) ? 2 : 0;
+        const pb = msTgs.has(String(b.user_id)) ? 2 : 0;
+        if (pa !== pb) return pb - pa;
+        return Number(b.score || 0) - Number(a.score || 0);
+      });
+      const keep = g[0];
+      const bestScore = Math.max(...g.map((x: any) => Number(x.score || 0)));
+      // مجموع امتیاز واقعی (پنل) را هم در نظر بگیر
+      const msAll = ((await db.prepare("SELECT id, name, school_id, class_id FROM ms_students").all()).results || []) as any[];
+      const msHit = msAll.find((m: any) => normL(m.name) === k) || null;
+      let msTotal = 0;
+      if (msHit) {
+        const pr: any = await db.prepare("SELECT COALESCE(SUM(delta),0) AS t FROM ms_points WHERE student_id = ?").bind(Number(msHit.id)).first();
+        msTotal = Number(pr?.t || 0);
+      }
+      const finalScore = Math.max(bestScore, msTotal);
+      await db.prepare("UPDATE students SET score = ? WHERE user_id = ?").bind(finalScore, Number(keep.user_id)).run();
+      for (const d of g.slice(1)) {
+        await db.prepare("DELETE FROM students WHERE user_id = ?").bind(Number(d.user_id)).run();
+        removed++;
+      }
+      merged++;
+    }
+    return jsonOut({ ok: true, merged, removed });
   }
 
   if (path === "/api/ms/admin/resync-points" && request.method === "POST" && (isAdmin || isSuper)) {

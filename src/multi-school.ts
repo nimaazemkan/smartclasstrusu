@@ -285,6 +285,7 @@ export async function ensureSchoolTables(db: D1Database): Promise<void> {
       "ALTER TABLE ms_teachers ADD COLUMN birthday TEXT DEFAULT ''",
       "ALTER TABLE ms_classes ADD COLUMN join_code TEXT DEFAULT ''",
       "ALTER TABLE ms_submissions ADD COLUMN video_b64 TEXT DEFAULT ''",
+      "ALTER TABLE ms_submissions ADD COLUMN tg_from_id TEXT DEFAULT ''",
     ]) {
       try {
         await db.prepare(alter).run();
@@ -812,23 +813,41 @@ export async function handleMsTgUpdate(update: any, db: D1Database, deps: any): 
     const vidObj = msg.video || (msg.document && String(msg.document.mime_type || "").startsWith("video/") ? msg.document : null);
     if (isPhotoMsg || vidObj) {
       try {
-        let st: any = await db.prepare("SELECT * FROM ms_students WHERE tg_id = ? ORDER BY id DESC LIMIT 1").bind(fromId).first();
-        if (!st) {
-          const leg: any = await db.prepare("SELECT name FROM students WHERE user_id = ?").bind(fromId).first();
-          if (leg && String(leg.name || "").trim()) {
-            const nm = String(leg.name).replace(/\s+/g, " ").trim();
-            const all: any[] = ((await db.prepare("SELECT * FROM ms_students").all()).results || []) as any[];
-            const cand = all.find((r: any) => String(r.name || "").replace(/\s+/g, " ").trim() === nm) || null;
-            if (cand) {
-              st = cand;
-              if (!String(st.tg_id || "")) {
-                await db.prepare("UPDATE ms_students SET tg_id = ? WHERE id = ?").bind(chatId, Number(st.id)).run();
-              }
-            }
+        // ===== شناسایی فرستنده (پیام فورواردی = فرستنده اصلی) =====
+        const fwdUser: any = (msg as any).forward_from || ((msg as any).forward_origin && (msg as any).forward_origin.sender_user) || null;
+        const isFwd = Boolean(fwdUser || (msg as any).forward_sender_name);
+        // برای فوروارد با هویت پنهان، شناسه‌ای از دانش‌آموز نداریم — فقط نام؛ هرگز شناسه‌ی فورواردکننده (معلم) را لینک نکن!
+        const senderId = fwdUser ? String(fwdUser.id || "") : (isFwd ? "" : String(msg.from?.id || msg.chat?.id || ""));
+        const senderName = String((msg as any).forward_sender_name || "") ||
+          (fwdUser ? String(fwdUser.first_name || "") + " " + String(fwdUser.last_name || "") : "") ||
+          String(msg.from?.first_name || "") + " " + String(msg.from?.last_name || "");
+        // نرمال‌سازی قوی (حذف نیم‌فاصله/فاصله) + تطبیق شامل — مثل همگام‌سازی امتیازها
+        const msNorm = (x: string): string => String(x || "").replace(/[\u200c\u200d\u200e\u200f]/g, "").replace(/\s+/g, "").trim();
+        const msFindByName = async (nmRaw: string): Promise<any | null> => {
+          const all: any[] = ((await db.prepare("SELECT * FROM ms_students").all()).results || []) as any[];
+          const nm = msNorm(nmRaw);
+          if (nm.length < 4) return null;
+          let hit = all.find((r: any) => msNorm(r.name) === nm) || null;
+          if (!hit) {
+            hit = all.find((r: any) => {
+              const rn = msNorm(r.name);
+              return rn.length >= 4 && (rn.includes(nm) || nm.includes(rn));
+            }) || null;
           }
+          return hit;
+        };
+        let st: any = await db.prepare("SELECT * FROM ms_students WHERE tg_id = ? ORDER BY id DESC LIMIT 1").bind(senderId).first();
+        if (!st) {
+          const leg: any = await db.prepare("SELECT name FROM students WHERE user_id = ?").bind(senderId).first();
+          if (leg && String(leg.name || "").trim()) st = await msFindByName(String(leg.name));
         }
-        if (st) {
-          const msSchool = Number(st.school_id);
+        if (!st) st = await msFindByName(senderName);
+        if (st && senderId && !String(st.tg_id || "")) {
+          await db.prepare("UPDATE ms_students SET tg_id = ? WHERE id = ?").bind(senderId, Number(st.id)).run();
+        }
+        {
+          const big: any = await db.prepare("SELECT school_id FROM ms_students GROUP BY school_id ORDER BY COUNT(*) DESC LIMIT 1").first();
+          const msSchool = Number(st ? st.school_id : big?.school_id || 0);
           const msToken = await msBotToken(db, deps, msSchool);
           const dl = async (fileId: string): Promise<Uint8Array> => {
             const gr = await fetch(`https://api.telegram.org/bot${msToken}/getFile?file_id=${encodeURIComponent(fileId)}`);
@@ -867,7 +886,7 @@ export async function handleMsTgUpdate(update: any, db: D1Database, deps: any): 
                     body: JSON.stringify({
                       chat_id: chatIdT,
                       ...(mediaKind === "video" ? { video: fileId } : { photo: fileId }),
-                      caption: `${mediaKind === "video" ? "🎥 ویدیو" : "📷 عکس"} تکلیف ${st.name}${capText ? " — " + capText : ""} — برای تایید/رد دکمه‌ها را بزنید`,
+                      caption: `${mediaKind === "video" ? "🎥 ویدیو" : "📷 عکس"} تکلیف ${st ? st.name : String(senderName || "").trim() || "ناشناس"}${capText ? " — " + capText : ""} — برای تایید/رد دکمه‌ها را بزنید`,
                       reply_markup: { inline_keyboard: kb },
                     }),
                   });
@@ -887,6 +906,11 @@ export async function handleMsTgUpdate(update: any, db: D1Database, deps: any): 
               /* بی‌صدا */
             }
           };
+          const whoPre = st ? "" : "👤 " + (String(senderName || "").trim() || "کاربر " + (senderId || "ناشناس")) + " (⚠️ شناسایی‌نشده) — ";
+          const notifyUnassigned = async (): Promise<void> => {
+            if (st) return;
+            await msTgNotifyTeachers(db, deps, msSchool, "⚠️ تکلیف تلگرامی از «" + (String(senderName || "").trim() || senderId) + "» ثبت شد ولی دانش‌آموز شناسایی نشد. از «صندوق ورودی» در اپ، آن را به دانش‌آموز وصل کنید.");
+          };
           if (vidObj) {
             const vfId = String(vidObj.file_id || "");
             const vbuf = await dl(vfId);
@@ -894,11 +918,11 @@ export async function handleMsTgUpdate(update: any, db: D1Database, deps: any): 
             if (vbuf.length > 0 && vbuf.length <= 2200000) {
               const video = "data:video/mp4;base64," + toB64(vbuf);
               const resV: any = await db
-                .prepare("INSERT INTO ms_submissions (school_id, assignment_id, student_id, class_id, text, video_b64, late, created_at) VALUES (?, 0, ?, ?, ?, ?, 0, ?)")
-                .bind(msSchool, Number(st.id), Number(st.class_id), capV ? "🎥 " + capV : "🎥 ویدیو (از تلگرام)", video, nowIso())
+                .prepare("INSERT INTO ms_submissions (school_id, assignment_id, student_id, class_id, text, video_b64, late, created_at, tg_from_id) VALUES (?, 0, ?, ?, ?, ?, 0, ?, ?)")
+                .bind(msSchool, Number(st ? st.id : 0), Number(st ? st.class_id : 0), whoPre + (capV ? "🎥 " + capV : "🎥 ویدیو (از تلگرام)"), video, nowIso(), senderId)
                 .run();
               const subId = Number(resV?.meta?.last_row_id || 0);
-              if (subId) await tgNotifyHwReview(subId, capV, "video", vfId);
+              if (subId) { await tgNotifyHwReview(subId, capV, "video", vfId); await notifyUnassigned(); }
             } else {
               await msTgSend(msToken, chatId, "⚠️ حجم ویدیو زیاد است (حداکثر ۲ مگابایت). لطفاً ویدیوی کوتاه‌تری بفرستید یا از پنل وب ارسال کنید.");
             }
@@ -913,11 +937,11 @@ export async function handleMsTgUpdate(update: any, db: D1Database, deps: any): 
             if (pbuf.length > 0 && pbuf.length <= 900000) {
               const photo = "data:image/jpeg;base64," + toB64(pbuf);
               const resP: any = await db
-                .prepare("INSERT INTO ms_submissions (school_id, assignment_id, student_id, class_id, text, photo_b64, late, created_at) VALUES (?, 0, ?, ?, ?, ?, 0, ?)")
-                .bind(msSchool, Number(st.id), Number(st.class_id), capP ? "📷 " + capP : "📷 تکلیف عکس (از تلگرام)", photo, nowIso())
+                .prepare("INSERT INTO ms_submissions (school_id, assignment_id, student_id, class_id, text, photo_b64, late, created_at, tg_from_id) VALUES (?, 0, ?, ?, ?, ?, 0, ?, ?)")
+                .bind(msSchool, Number(st ? st.id : 0), Number(st ? st.class_id : 0), whoPre + (capP ? "📷 " + capP : "📷 تکلیف عکس (از تلگرام)"), photo, nowIso(), senderId)
                 .run();
               const subId = Number(resP?.meta?.last_row_id || 0);
-              if (subId) await tgNotifyHwReview(subId, capP, "photo", String(pick.file_id || ""));
+              if (subId) { await tgNotifyHwReview(subId, capP, "photo", String(pick.file_id || "")); await notifyUnassigned(); }
             } else {
               await msTgSend(msToken, chatId, "⚠️ حجم عکس زیاد است (حداکثر ۹۰۰ کیلوبایت). لطفاً عکس کم‌حجم‌تری بفرستید یا از پنل وب ارسال کنید.");
             }
@@ -2043,7 +2067,7 @@ export async function handleMultiSchoolRequest(
       if (aid === 0) {
         const freeRows = await db
           .prepare(
-            `SELECT sub.*, st.name AS student_name FROM ms_submissions sub JOIN ms_students st ON st.id = sub.student_id
+            `SELECT sub.*, COALESCE(st.name, '⚠️ ناشناخته') AS student_name FROM ms_submissions sub LEFT JOIN ms_students st ON st.id = sub.student_id
              WHERE sub.assignment_id = 0 AND sub.school_id = ? ORDER BY sub.id DESC LIMIT 60`
           )
           .bind(schoolId)
@@ -2110,8 +2134,24 @@ export async function handleMultiSchoolRequest(
       const isFreeHw = Number(s.assignment_id) === 0;
       const a: any = isFreeHw ? null : await db.prepare("SELECT * FROM ms_assignments WHERE id = ?").bind(Number(s.assignment_id)).first();
       if (!isFreeHw && !a) return jsonOut({ error: "تکلیف یافت نشد." }, 404);
-      const cls = await assertClass(Number(isFreeHw ? s.class_id : a.class_id));
-      if (!cls) return jsonOut({ error: "این کلاس در اختیار شما نیست." }, 403);
+      // اتصال تکلیف ناشناخته به دانش‌آموز (اختیاری — از کارت «صندوق ورودی»)
+      let stuId = Number(s.student_id) || 0;
+      let clsId = Number(isFreeHw ? s.class_id : a.class_id) || 0;
+      const assignId = Number(body.assignStudentId || 0);
+      if (isFreeHw && assignId && assignId !== stuId) {
+        const as: any = await db.prepare("SELECT * FROM ms_students WHERE id = ? AND school_id = ?").bind(assignId, schoolId).first();
+        if (!as) return jsonOut({ error: "دانش‌آموز یافت نشد." }, 404);
+        stuId = assignId;
+        clsId = Number(as.class_id) || clsId;
+        await db.prepare("UPDATE ms_submissions SET student_id = ?, class_id = ? WHERE id = ?").bind(stuId, clsId, sid).run();
+        if (String(s.tg_from_id || "") && !String(as.tg_id || "")) {
+          await db.prepare("UPDATE ms_students SET tg_id = ? WHERE id = ?").bind(String(s.tg_from_id), assignId).run();
+        }
+      }
+      if (clsId > 0) {
+        const cls = await assertClass(clsId);
+        if (!cls) return jsonOut({ error: "این کلاس در اختیار شما نیست." }, 403);
+      }
       const score = Number(body.score);
       if (!isFinite(score)) return jsonOut({ error: "نمره معتبر وارد کنید." }, 400);
       const fbTxt = String(body.feedback || "").trim();
@@ -2128,23 +2168,23 @@ export async function handleMultiSchoolRequest(
         .prepare("UPDATE ms_submissions SET score = ?, feedback = ?, reviewed_at = ? WHERE id = ?")
         .bind(score, fbTxt, nowIso(), sid)
         .run();
-      if (ptsDelta !== 0) {
+      if (ptsDelta !== 0 && stuId > 0) {
         await db
           .prepare("INSERT INTO ms_points (school_id, class_id, student_id, delta, reason, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
-          .bind(schoolId, Number(s.class_id), Number(s.student_id), ptsDelta, mkReason, "معلم", nowIso())
+          .bind(schoolId, clsId, stuId, ptsDelta, mkReason, "معلم", nowIso())
           .run();
-        await msSyncLegacyScore(db, Number(s.student_id), ptsDelta);
+        await msSyncLegacyScore(db, stuId, ptsDelta);
       }
-      await msTgNotifyStudent(
+      if (stuId > 0) await msTgNotifyStudent(
         db,
         deps,
         schoolId,
-        Number(s.student_id),
+        stuId,
         "✅ تکلیف شما تصحیح شد" + (isFreeHw ? "" : " («" + a.title + "»)") + "!\n⭐ نمره/امتیاز: " + score +
           (ptsDelta !== 0 ? "\n📥 " + (ptsDelta > 0 ? "+" : "") + ptsDelta + " به مجموع امتیازاتت اضافه شد" : "") +
           (fbTxt ? "\n💬 " + fbTxt : "")
       );
-      return jsonOut({ ok: true, pointsAdded: ptsDelta });
+      return jsonOut({ ok: true, pointsAdded: stuId > 0 ? ptsDelta : 0, assigned: assignId > 0 ? stuId : 0 });
     }
 
     if (path === "/api/ms/announce" && request.method === "POST") {
@@ -3562,8 +3602,8 @@ export async function handleMultiSchoolRequest(
     const pendBinds: any[] = cidQ ? [schoolId, cidQ] : [schoolId];
     const pendRows = await db
       .prepare(
-        `SELECT sub.id, sub.text, sub.photo_b64, sub.video_b64, sub.created_at, st.name AS student_name
-         FROM ms_submissions sub JOIN ms_students st ON st.id = sub.student_id
+        `SELECT sub.id, sub.text, sub.photo_b64, sub.video_b64, sub.created_at, COALESCE(st.name, '⚠️ ناشناخته') AS student_name
+         FROM ms_submissions sub LEFT JOIN ms_students st ON st.id = sub.student_id
          WHERE sub.school_id = ? AND ${pendWhere} AND COALESCE(sub.reviewed_at, '') = ''
          ORDER BY sub.id DESC`
       )

@@ -1824,10 +1824,12 @@ const SCHOOL_JS = String.raw`
       try {
         var score = Number(document.getElementById("revScore_" + submissionId).value);
         if (!isFinite(score)) return showToast("نمره را وارد کنید");
+        var asgSelEl = document.getElementById("asgSel_" + submissionId);
         var rv = await api("/api/ms/teacher/review", {
           submissionId: submissionId,
           score: score,
-          feedback: document.getElementById("revFb_" + submissionId).value.trim()
+          feedback: document.getElementById("revFb_" + submissionId).value.trim(),
+          assignStudentId: asgSelEl ? Number(asgSelEl.value || 0) : 0
         });
         var pa = Number(rv && typeof rv.pointsAdded === "number" ? rv.pointsAdded : 0);
         showToast("✅ نمره و بازخورد ثبت شد." + (pa > 0 ? " ⭐ +" + pa + " به مجموع امتیازات اضافه شد" : pa < 0 ? " ⭐ " + pa + " امتیاز (تعدیل نمره قبلی)" : ""));
@@ -2876,10 +2878,12 @@ const SCHOOL_JS = String.raw`
           api("/api/ms/teacher/inbox"),
           api("/api/ms/teacher/assignments?classId=" + selClassId),
           api("/api/ms/teacher/muddy").catch(function () { return { muddy: [] }; }),
+          api("/api/ms/teacher/class?classId=" + selClassId).catch(function () { return { roster: [] }; }),
         ]);
         var d = basicFetch[0];
         var asg = basicFetch[1];
         var muddy = basicFetch[2];
+        var rdata = basicFetch[3] || { roster: [] };
         var subSections = "";
         var asgList = (asg.assignments || []).slice();
         asgList.push({ id: 0, title: "تکلیف آزاد ارسالی" });
@@ -2889,7 +2893,7 @@ const SCHOOL_JS = String.raw`
         for (var ai = 0; ai < asgList.length; ai++) {
           var a = asgList[ai];
           var sd = subsAll[ai] || { submissions: [] };
-          var rows = (sd.submissions || []).filter(function (x) { return x.submitted && !x.reviewed; });
+          var rows = (sd.submissions || []).filter(function (x) { return x.submitted; }).sort(function (p2, q2) { return (p2.reviewed === q2.reviewed) ? 0 : (p2.reviewed ? 1 : -1); }).slice(0, 14);
           if (!rows.length) continue;
           subSections += rows.map(function (x) {
             return '<div class="card">' +
@@ -2898,6 +2902,7 @@ const SCHOOL_JS = String.raw`
               (x.text ? '<div style="margin:7px 0;padding:9px 11px;background:var(--surface-2);border-radius:11px;font-size:12.5px;">' + esc(x.text) + '</div>' : '') +
               (x.photo ? '<img src="' + x.photo + '" style="width:100%;max-height:220px;object-fit:contain;border-radius:11px;cursor:pointer;margin:6px 0;" onclick="viewPhoto(this.src)" />' : '') +
               (x.video ? '<video src="' + x.video + '" controls style="width:100%;max-height:220px;border-radius:11px;margin:6px 0;"></video>' : '') +
+              (Number(x.studentId) === 0 ? '<div style="margin:8px 0;display:flex;gap:6px;align-items:center;flex-wrap:wrap;"><span class="muted" style="font-size:11.5px;">👤 این تکلیف به دانش‌آموزی وصل نیست — انتخاب کنید:</span><select id="asgSel_' + x.submissionId + '" class="input" style="flex:1;min-width:170px;margin:0;"><option value="0">— انتخاب دانش‌آموز —</option>' + (rdata.roster || []).map(function (rr) { return '<option value="' + rr.id + '">' + esc(rr.name) + '</option>'; }).join("") + '</select></div>' : '') +
               '<div style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap;">' +
                 '<input id="revScore_' + x.submissionId + '" class="input" type="number" step="0.25" dir="ltr" placeholder="نمره / امتیاز⭐" style="width:95px;margin:0;" value="' + (x.score !== null ? x.score : "") + '" />' +
                 '<input id="revFb_' + x.submissionId + '" class="input" placeholder="بازخورد..." style="flex:1;min-width:140px;margin:0;" value="' + esc(x.feedback) + '" />' +

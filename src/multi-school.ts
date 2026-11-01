@@ -8,6 +8,10 @@ import type { D1Database } from "./turso-d1";
 import { getLiveRoomPublicStatus, getLiveRoomsStats } from "./live-class";
 
 export const SUPER_ADMIN_PASSWORD = process.env.SUPER_ADMIN_PASSWORD || "SuperMina1362@";
+function msNum(v: any): number {
+  const t = String(v ?? "").replace(/[\u06F0-\u06F9]/g, (d) => String.fromCharCode(d.charCodeAt(0) - 0x06f0 + 48)).replace(/[\u0660-\u0669]/g, (d) => String.fromCharCode(d.charCodeAt(0) - 0x0660 + 48)).replace(/[\u066B]/g, ".").replace(/\s/g, "").trim();
+  return t ? Number(t) : NaN;
+}
 
 // ---------------------------------------------------------------------------
 // جداول دیتابیس (خودکارسازی کامل — بدون نیاز به SQL دستی)
@@ -840,7 +844,12 @@ export async function handleMsTgUpdate(update: any, db: D1Database, deps: any): 
     const isPhotoMsg = (Array.isArray(msg.photo) && msg.photo.length > 0) || Boolean(imgDoc);
     const vidObj = msg.video || (msg.document && String(msg.document.mime_type || "").startsWith("video/") ? msg.document : null);
     const audioObj = (msg as any).voice || (msg as any).audio || null;
-    const isTextHw = Boolean(text && !text.startsWith("/"));
+    const msStripMenu = (x: string): string => String(x || "").replace(/[^\u0600-\u06FF0-9A-Za-z]+/g, "");
+    const msMenuSet = new Set(["پرسش و پاسخ", "رقابت و جوایز", "کارگاه یادگیری", "امتیاز من", "رتبه من", "ارسال تکلیف", "تاریخچه من", "نشانهای من", "استریک من", "نمودار من", "تولد من", "سطح من", "پنل من", "راهنما", "ماموریت روز", "ابزارهای هوشمند کلاس", "لیست", "رتبهبندی", "تکالیف", "غایبین", "ددلاینها", "اکسل", "نمودار", "برنده", "استریکها", "تولدها", "گزارش هفتگی", "کوییز", "کوییزAI", "کوییز چندتایی", "کوییز از PDFمتن", "قرعهکشی", "ارسال همگانی", "انگیزشی", "ریست", "شروع", "کمک", "تکلیف جدید", "کارنامه", "پروفایل", "سطرحم", "دعوت"]);
+    const isMenuText = Boolean(text && (text.trim().startsWith("/") || msMenuSet.has(msStripMenu(text)) || msStripMenu(text).length < 2));
+    const chatType = String(msg.chat?.type || "");
+    const hwKeyword = /(تکلیف|تمرین|انشا|صفحه|جزوه)/.test(String(text || ""));
+    const isTextHw = Boolean(text && !isMenuText && (chatType === "private" || hwKeyword));
     if (isPhotoMsg || vidObj || audioObj || isTextHw) {
       try {
         // ===== شناسایی فرستنده (پیام فورواردی = فرستنده اصلی) =====
@@ -851,6 +860,28 @@ export async function handleMsTgUpdate(update: any, db: D1Database, deps: any): 
         const senderName = String((msg as any).forward_sender_name || "") ||
           (fwdUser ? String(fwdUser.first_name || "") + " " + String(fwdUser.last_name || "") : "") ||
           String(msg.from?.first_name || "") + " " + String(msg.from?.last_name || "");
+        // ===== پیام معلم/مدیر هرگز تکلیف نیست (دستورها، اطلاعیه‌ها، تاییدها) =====
+        {
+          const msNormT = (x: string): string => String(x || "").replace(/[\u200c\u200d\u200e\u200f]/g, "").replace(/\s+/g, "").trim();
+          let isTeacherSender = Array.isArray(deps.teacherTgIds) && deps.teacherTgIds.map(String).includes(senderId);
+          if (!isTeacherSender && senderId) {
+            const t1: any = await db.prepare("SELECT id FROM ms_teachers WHERE tg_id = ?").bind(senderId).first();
+            if (t1) isTeacherSender = true;
+            if (!isTeacherSender) {
+              const scT: any = await db.prepare("SELECT admin_tg_id FROM schools WHERE admin_tg_id != ''").all();
+              for (const r of ((scT.results || []) as any[])) if (String(r.admin_tg_id || "") === senderId) isTeacherSender = true;
+            }
+          }
+          if (!isTeacherSender && msNormT(senderName).length >= 4) {
+            const nmT = msNormT(senderName);
+            const ts: any = await db.prepare("SELECT name FROM ms_teachers").all();
+            for (const r of ((ts.results || []) as any[])) {
+              const tn = msNormT(r.name);
+              if (tn.length >= 4 && (tn === nmT || tn.includes(nmT) || nmT.includes(tn))) isTeacherSender = true;
+            }
+          }
+          if (isTeacherSender) return false;
+        }
         // نرمال‌سازی قوی (حذف نیم‌فاصله/فاصله) + تطبیق شامل — مثل همگام‌سازی امتیازها
         const msNorm = (x: string): string => String(x || "").replace(/[\u200c\u200d\u200e\u200f]/g, "").replace(/\s+/g, "").trim();
         const msFindByName = async (nmRaw: string): Promise<any | null> => {
@@ -2253,8 +2284,8 @@ export async function handleMultiSchoolRequest(
         const cls = await assertClass(clsId);
         if (!cls) return jsonOut({ error: "این کلاس در اختیار شما نیست." }, 403);
       }
-      const score = Number(body.score);
-      if (!isFinite(score)) return jsonOut({ error: "نمره معتبر وارد کنید." }, 400);
+      const score = msNum(body.score);
+      if (!isFinite(score)) return jsonOut({ error: "نمره را وارد کنید (عدد معتبر)." }, 400);
       const fbTxt = String(body.feedback || "").trim();
       // نمره تکلیف به مجموع امتیازات دانش‌آموز هم اضافه می‌شود (اپ + تلگرام)
       // با ثبت دقیق مبلغ اهدایی هر تکلیف، تصحیح مجدد فقط «تفاوت» را اعمال می‌کند (بدون دوباره‌شماری)
@@ -2286,6 +2317,22 @@ export async function handleMultiSchoolRequest(
           (fbTxt ? "\n💬 " + fbTxt : "")
       );
       return jsonOut({ ok: true, pointsAdded: stuId > 0 ? ptsDelta : 0, assigned: assignId > 0 ? stuId : 0 });
+    }
+
+    if (path === "/api/ms/teacher/submission/delete" && request.method === "POST") {
+      const body = (await request.json().catch(() => ({}))) as any;
+      const sid = Number(body.submissionId || 0);
+      const s: any = await db.prepare("SELECT * FROM ms_submissions WHERE id = ? AND school_id = ?").bind(sid, schoolId).first();
+      if (!s) return jsonOut({ error: "تکلیف یافت نشد." }, 404);
+      const mkReason = "نمره تکلیف #" + sid;
+      const mk: any = await db.prepare("SELECT COALESCE(SUM(delta),0) AS tot FROM ms_points WHERE school_id = ? AND reason = ?").bind(schoolId, mkReason).first();
+      const mkSum = Number(mk?.tot || 0);
+      if (Number(s.score || 0) !== 0 && Math.abs(mkSum) > 0.0001) {
+        await db.prepare("DELETE FROM ms_points WHERE school_id = ? AND reason = ?").bind(schoolId, mkReason).run();
+        if (Number(s.student_id) > 0) await msSyncLegacyScore(db, Number(s.student_id), -mkSum);
+      }
+      await db.prepare("DELETE FROM ms_submissions WHERE id = ?").bind(sid).run();
+      return jsonOut({ ok: true });
     }
 
     if (path === "/api/ms/announce" && request.method === "POST") {
@@ -3436,8 +3483,13 @@ export async function handleMultiSchoolRequest(
     }
     scored.sort((a, b) => b.points - a.points);
     const rank = scored.findIndex((x) => x.id === stId) + 1;
+    const ptsLast = await db
+      .prepare("SELECT delta, reason, created_at FROM ms_points WHERE student_id = ? ORDER BY id DESC LIMIT 12")
+      .bind(stId)
+      .all();
     return jsonOut({
       student: { id: stId, name: st.name },
+      pointsLast: (ptsLast.results || []).map((q: any) => ({ delta: Number(q.delta || 0), reason: String(q.reason || ""), date: String(q.created_at || "").split("T")[0] })),
       mission: mission
         ? { id: Number(mission.id), text: mission.mission, proof: mission.proof || "", status: mission.status || "open", points: Number(mission.points || 0), feedback: mission.feedback || "", date: mission.date || today }
         : null,
@@ -3762,7 +3814,7 @@ export async function handleMultiSchoolRequest(
     const kind = String(body.kind || "");
     const id = Number(body.id || 0);
     const approve = body.decision !== "reject";
-    const points = Math.max(0, Number(body.points || 0));
+    const points = Math.max(0, msNum(body.points) || 0);
     const feedback = String(body.feedback || "").trim();
     const givePoints = async (sid: number, pts: number, reason: string) => {
       if (pts > 0) {
@@ -3875,7 +3927,7 @@ export async function handleMultiSchoolRequest(
   if (path === "/api/ms/teacher/points" && request.method === "POST" && (isTeacher || isAdmin)) {
     const body = (await request.json().catch(() => ({}))) as any;
     const sid = Number(body.studentId || 0);
-    const delta = Number(body.delta || 0);
+    const delta = msNum(body.delta);
     if (!sid || !delta) return jsonOut({ error: "دانش‌آموز و مقدار امتیاز لازم است." }, 400);
     const st: any = await db.prepare("SELECT * FROM ms_students WHERE id = ? AND school_id = ?").bind(sid, schoolId).first();
     if (!st) return jsonOut({ error: "دانش‌آموز یافت نشد." }, 404);

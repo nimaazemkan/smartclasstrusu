@@ -826,7 +826,7 @@ const SCHOOL_JS = String.raw`
                 }).join("") +
               '</select>' +
               '<input id="grTitle" class="input" placeholder="عنوان (مثلاً آزمون فصل ۳)" />' +
-              '<input id="grScore" class="input" type="number" step="0.25" dir="ltr" placeholder="نمره (مثلاً 18.5)" />' +
+              '<input id="grScore" class="input" type="text" inputmode="decimal" dir="ltr" placeholder="نمره (مثلاً 18.5)" />' +
               '<button class="btn btn-emerald" onclick="saveGrade()">✅ ثبت نمره + امتیاز</button>' +
             '</div>' +
             '<div class="section-title">📋 آخرین نمرات ثبت‌شده</div>' +
@@ -1820,7 +1820,7 @@ const SCHOOL_JS = String.raw`
                 (s.video ? '<video src="' + s.video + '" controls style="width:100%;max-height:260px;border-radius:11px;margin:6px 0;"></video>' : '') +
                 (s.audio ? '<audio src="' + s.audio + '" controls style="width:100%;height:40px;margin:6px 0;"></audio>' : '') +
                 '<div style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap;">' +
-                  '<input id="revScore_' + s.submissionId + '" class="input" type="number" step="0.25" dir="ltr" placeholder="نمره / امتیاز⭐" style="width:95px;margin:0;" value="' + (s.score !== null ? s.score : "") + '" />' +
+                  '<input id="revScore_' + s.submissionId + '" class="input" type="text" inputmode="decimal" dir="ltr" placeholder="نمره / امتیاز⭐" style="width:95px;margin:0;" value="' + (s.score !== null ? s.score : "") + '" />' +
                   '<input id="revFb_' + s.submissionId + '" class="input" placeholder="بازخورد معلم..." style="flex:1;min-width:150px;margin:0;" value="' + esc(s.feedback) + '" />' +
                   '<button class="btn btn-emerald btn-sm" onclick="saveReview(' + s.submissionId + ')">✅ ثبت</button>' +
                 '</div>' +
@@ -1890,10 +1890,16 @@ const SCHOOL_JS = String.raw`
       } catch (e) { showToast("❌ " + e.message); }
     }
 
+    function normDigitsC(v) {
+      return String(v == null ? "" : v).replace(/[\u06F0-\u06F9]/g, function (d) { return String.fromCharCode(d.charCodeAt(0) - 0x06F0 + 48); }).replace(/[\u0660-\u0669]/g, function (d) { return String.fromCharCode(d.charCodeAt(0) - 0x0660 + 48); }).replace(/\u066B/g, ".").trim();
+    }
+
     async function saveReview(submissionId) {
       try {
-        var score = Number(document.getElementById("revScore_" + submissionId).value);
-        if (!isFinite(score)) return showToast("نمره را وارد کنید");
+        var rawScore = normDigitsC((document.getElementById("revScore_" + submissionId) || {}).value);
+        if (!rawScore) return showToast("نمره را وارد کنید");
+        var score = Number(rawScore);
+        if (!isFinite(score)) return showToast("نمره نامعتبر است");
         var asgSelEl = document.getElementById("asgSel_" + submissionId);
         var rv = await api("/api/ms/teacher/review", {
           submissionId: submissionId,
@@ -2975,7 +2981,7 @@ const SCHOOL_JS = String.raw`
               (x.audio ? '<audio src="' + x.audio + '" controls style="width:100%;height:40px;margin:6px 0;"></audio>' : '') +
               (Number(x.studentId) === 0 ? '<div style="margin:8px 0;display:flex;gap:6px;align-items:center;flex-wrap:wrap;"><span class="muted" style="font-size:11.5px;">👤 این تکلیف به دانش‌آموزی وصل نیست — انتخاب کنید:</span><select id="asgSel_' + x.submissionId + '" class="input" style="flex:1;min-width:170px;margin:0;"><option value="0">— انتخاب دانش‌آموز —</option>' + (rdata.roster || []).map(function (rr) { return '<option value="' + rr.id + '">' + esc(rr.name) + '</option>'; }).join("") + '</select></div>' : '') +
               '<div style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap;">' +
-                '<input id="revScore_' + x.submissionId + '" class="input" type="number" step="0.25" dir="ltr" placeholder="نمره / امتیاز⭐" style="width:95px;margin:0;" value="' + (x.score !== null ? x.score : "") + '" />' +
+                '<input id="revScore_' + x.submissionId + '" class="input" type="text" inputmode="decimal" dir="ltr" placeholder="نمره / امتیاز⭐" style="width:95px;margin:0;" value="' + (x.score !== null ? x.score : "") + '" />' +
                 '<input id="revFb_' + x.submissionId + '" class="input" placeholder="بازخورد..." style="flex:1;min-width:140px;margin:0;" value="' + esc(x.feedback) + '" />' +
                 '<button class="btn btn-emerald btn-sm" onclick="saveReview(' + x.submissionId + ')">✅ ثبت نمره + امتیاز</button>' +
               '</div>' + fbPresetsHtml("revFb_" + x.submissionId) + '</div>';
@@ -2992,7 +2998,7 @@ const SCHOOL_JS = String.raw`
               '<div class="muted" style="font-size:12px;margin:5px 0;">🎯 ' + esc(m.mission) + '</div>' +
               '<div style="padding:8px 10px;background:var(--surface-2);border-radius:10px;font-size:12.5px;">📝 ' + esc(m.proof) + '</div>' +
               '<div style="display:flex;gap:7px;margin-top:8px;flex-wrap:wrap;">' +
-                '<input id="pts_mission_' + m.id + '" class="input" type="number" dir="ltr" placeholder="⭐" style="width:80px;margin:0;" value="5" />' +
+                '<input id="pts_mission_' + m.id + '" class="input" type="text" inputmode="decimal" dir="ltr" placeholder="⭐" style="width:80px;margin:0;" value="5" />' +
                 '<input id="fb_mission_' + m.id + '" class="input" placeholder="بازخورد (اختیاری)" style="flex:1;min-width:110px;margin:0;" />' +
                 '<button class="btn btn-emerald btn-sm" onclick="approveInbox(\'mission\',' + m.id + ',\'approve\')">✅</button>' +
                 '<button class="btn btn-rose btn-sm" onclick="approveInbox(\'mission\',' + m.id + ',\'reject\')">❌</button>' +
@@ -3005,7 +3011,7 @@ const SCHOOL_JS = String.raw`
               (l.topic ? '<div class="muted" style="font-size:12px;margin:5px 0;">📌 ' + esc(l.topic) + '</div>' : '') +
               '<div style="padding:8px 10px;background:var(--surface-2);border-radius:10px;font-size:12.5px;">📝 ' + esc(l.summary) + '</div>' +
               '<div style="display:flex;gap:7px;margin-top:8px;flex-wrap:wrap;">' +
-                '<input id="pts_lab_' + l.id + '" class="input" type="number" dir="ltr" placeholder="⭐" style="width:80px;margin:0;" value="10" />' +
+                '<input id="pts_lab_' + l.id + '" class="input" type="text" inputmode="decimal" dir="ltr" placeholder="⭐" style="width:80px;margin:0;" value="10" />' +
                 '<input id="fb_lab_' + l.id + '" class="input" placeholder="بازخورد (اختیاری)" style="flex:1;min-width:110px;margin:0;" />' +
                 '<button class="btn btn-emerald btn-sm" onclick="approveInbox(\'lab\',' + l.id + ',\'approve\')">✅</button>' +
                 '<button class="btn btn-rose btn-sm" onclick="approveInbox(\'lab\',' + l.id + ',\'reject\')">❌</button>' +
@@ -3043,7 +3049,7 @@ const SCHOOL_JS = String.raw`
 
     async function approveInbox(kind, id, decision) {
       try {
-        var pts = Number((document.getElementById("pts_" + kind + "_" + id) || {}).value || 0);
+        var pts = Number(normDigitsC((document.getElementById("pts_" + kind + "_" + id) || {}).value) || 0);
         var fb = (document.getElementById("fb_" + kind + "_" + id) || {}).value || "";
         await api("/api/ms/teacher/inbox/approve", { kind: kind, id: id, decision: decision, points: pts, feedback: fb });
         showToast(decision === "reject" ? "❌ رد شد." : "✅ تایید شد و امتیاز ثبت گردید.");
@@ -3316,7 +3322,7 @@ const SCHOOL_JS = String.raw`
     function setPointsCustom(studentId) {
       var v = prompt("مقدار امتیاز (مثلاً 10 یا -3):", "10");
       if (v === null) return;
-      var n = Number(v);
+      var n = Number(normDigitsC(v));
       if (!isFinite(n) || !n) return showToast("مقدار نامعتبر است");
       var r = prompt("دلیل امتیاز (اختیاری):", n > 0 ? "فعالیت عالی" : "کسر امتیاز");
       setPoints(studentId, n, r || "");

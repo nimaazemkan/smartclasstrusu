@@ -12218,6 +12218,7 @@ export default {
         const handled = await handleMsTgUpdate(upd, env.telegram_bot_db, {
           defaultBotToken: BOT_TOKEN,
           normalizeDigits,
+          teacherTgIds: [String(TEACHER_ID)],
           transcribeAudio: async (audioDataUrl: string) => await dataUrlToTranscript(env, audioDataUrl),
         } as any);
         if (handled) return new Response("ok");

@@ -2114,11 +2114,37 @@ export async function handleMultiSchoolRequest(
       if (!cls) return jsonOut({ error: "این کلاس در اختیار شما نیست." }, 403);
       const score = Number(body.score);
       if (!isFinite(score)) return jsonOut({ error: "نمره معتبر وارد کنید." }, 400);
+      const fbTxt = String(body.feedback || "").trim();
+      // نمره تکلیف به مجموع امتیازات دانش‌آموز هم اضافه می‌شود (اپ + تلگرام)
+      // با ثبت دقیق مبلغ اهدایی هر تکلیف، تصحیح مجدد فقط «تفاوت» را اعمال می‌کند (بدون دوباره‌شماری)
+      const mkReason = "نمره تکلیف #" + sid;
+      const prevRow: any = await db
+        .prepare("SELECT COALESCE(SUM(delta),0) AS tot FROM ms_points WHERE school_id = ? AND reason = ?")
+        .bind(schoolId, mkReason)
+        .first();
+      const prevAwarded = Number(prevRow?.tot || 0);
+      const ptsDelta = Math.round((score - prevAwarded) * 100) / 100;
       await db
         .prepare("UPDATE ms_submissions SET score = ?, feedback = ?, reviewed_at = ? WHERE id = ?")
-        .bind(score, String(body.feedback || "").trim(), nowIso(), sid)
+        .bind(score, fbTxt, nowIso(), sid)
         .run();
-      return jsonOut({ ok: true });
+      if (ptsDelta !== 0) {
+        await db
+          .prepare("INSERT INTO ms_points (school_id, class_id, student_id, delta, reason, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+          .bind(schoolId, Number(s.class_id), Number(s.student_id), ptsDelta, mkReason, "معلم", nowIso())
+          .run();
+        await msSyncLegacyScore(db, Number(s.student_id), ptsDelta);
+      }
+      await msTgNotifyStudent(
+        db,
+        deps,
+        schoolId,
+        Number(s.student_id),
+        "✅ تکلیف شما تصحیح شد" + (isFreeHw ? "" : " («" + a.title + "»)") + "!\n⭐ نمره/امتیاز: " + score +
+          (ptsDelta !== 0 ? "\n📥 " + (ptsDelta > 0 ? "+" : "") + ptsDelta + " به مجموع امتیازاتت اضافه شد" : "") +
+          (fbTxt ? "\n💬 " + fbTxt : "")
+      );
+      return jsonOut({ ok: true, pointsAdded: ptsDelta });
     }
 
     if (path === "/api/ms/announce" && request.method === "POST") {

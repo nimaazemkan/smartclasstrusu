@@ -827,7 +827,7 @@ const SCHOOL_JS = String.raw`
               '</select>' +
               '<input id="grTitle" class="input" placeholder="عنوان (مثلاً آزمون فصل ۳)" />' +
               '<input id="grScore" class="input" type="number" step="0.25" dir="ltr" placeholder="نمره (مثلاً 18.5)" />' +
-              '<button class="btn btn-emerald" onclick="saveGrade()">✅ ثبت نمره</button>' +
+              '<button class="btn btn-emerald" onclick="saveGrade()">✅ ثبت نمره + امتیاز</button>' +
             '</div>' +
             '<div class="section-title">📋 آخرین نمرات ثبت‌شده</div>' +
             '<div class="card"><table class="table"><thead><tr><th>دانش‌آموز</th><th>عنوان</th><th>نمره</th></tr></thead><tbody>' +
@@ -1750,7 +1750,7 @@ const SCHOOL_JS = String.raw`
                 (s.photo ? '<img src="' + s.photo + '" style="width:100%;max-height:230px;object-fit:contain;border-radius:11px;cursor:pointer;margin:6px 0;" onclick="viewPhoto(this.src)" />' : '') +
                 (s.video ? '<video src="' + s.video + '" controls style="width:100%;max-height:260px;border-radius:11px;margin:6px 0;"></video>' : '') +
                 '<div style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap;">' +
-                  '<input id="revScore_' + s.submissionId + '" class="input" type="number" step="0.25" dir="ltr" placeholder="نمره" style="width:95px;margin:0;" value="' + (s.score !== null ? s.score : "") + '" />' +
+                  '<input id="revScore_' + s.submissionId + '" class="input" type="number" step="0.25" dir="ltr" placeholder="نمره / امتیاز⭐" style="width:95px;margin:0;" value="' + (s.score !== null ? s.score : "") + '" />' +
                   '<input id="revFb_' + s.submissionId + '" class="input" placeholder="بازخورد معلم..." style="flex:1;min-width:150px;margin:0;" value="' + esc(s.feedback) + '" />' +
                   '<button class="btn btn-emerald btn-sm" onclick="saveReview(' + s.submissionId + ')">✅ ثبت</button>' +
                 '</div>' +
@@ -1824,12 +1824,13 @@ const SCHOOL_JS = String.raw`
       try {
         var score = Number(document.getElementById("revScore_" + submissionId).value);
         if (!isFinite(score)) return showToast("نمره را وارد کنید");
-        await api("/api/ms/teacher/review", {
+        var rv = await api("/api/ms/teacher/review", {
           submissionId: submissionId,
           score: score,
           feedback: document.getElementById("revFb_" + submissionId).value.trim()
         });
-        showToast("✅ نمره و بازخورد ثبت شد.");
+        var pa = Number(rv && typeof rv.pointsAdded === "number" ? rv.pointsAdded : 0);
+        showToast("✅ نمره و بازخورد ثبت شد." + (pa > 0 ? " ⭐ +" + pa + " به مجموع امتیازات اضافه شد" : pa < 0 ? " ⭐ " + pa + " امتیاز (تعدیل نمره قبلی)" : ""));
         renderApp();
       } catch (e) { showToast("❌ " + e.message); }
     }
@@ -2898,9 +2899,9 @@ const SCHOOL_JS = String.raw`
               (x.photo ? '<img src="' + x.photo + '" style="width:100%;max-height:220px;object-fit:contain;border-radius:11px;cursor:pointer;margin:6px 0;" onclick="viewPhoto(this.src)" />' : '') +
               (x.video ? '<video src="' + x.video + '" controls style="width:100%;max-height:220px;border-radius:11px;margin:6px 0;"></video>' : '') +
               '<div style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap;">' +
-                '<input id="revScore_' + x.submissionId + '" class="input" type="number" step="0.25" dir="ltr" placeholder="نمره" style="width:95px;margin:0;" value="' + (x.score !== null ? x.score : "") + '" />' +
+                '<input id="revScore_' + x.submissionId + '" class="input" type="number" step="0.25" dir="ltr" placeholder="نمره / امتیاز⭐" style="width:95px;margin:0;" value="' + (x.score !== null ? x.score : "") + '" />' +
                 '<input id="revFb_' + x.submissionId + '" class="input" placeholder="بازخورد..." style="flex:1;min-width:140px;margin:0;" value="' + esc(x.feedback) + '" />' +
-                '<button class="btn btn-emerald btn-sm" onclick="saveReview(' + x.submissionId + ')">✅ ثبت نمره</button>' +
+                '<button class="btn btn-emerald btn-sm" onclick="saveReview(' + x.submissionId + ')">✅ ثبت نمره + امتیاز</button>' +
               '</div>' + fbPresetsHtml("revFb_" + x.submissionId) + '</div>';
           }).join("");
         }

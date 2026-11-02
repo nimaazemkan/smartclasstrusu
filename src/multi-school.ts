@@ -274,6 +274,10 @@ export async function ensureSchoolTables(db: D1Database): Promise<void> {
         ts TEXT
       )`)
       .run();
+  await db.prepare("CREATE TABLE IF NOT EXISTS ms_questions (id INTEGER PRIMARY KEY AUTOINCREMENT, school_id INTEGER, class_id INTEGER DEFAULT 0, subject TEXT DEFAULT '', chapter TEXT DEFAULT '', qtype TEXT DEFAULT 'mcq', text TEXT DEFAULT '', options TEXT DEFAULT '[]', answer TEXT DEFAULT '', created_by TEXT DEFAULT '', created_at TEXT DEFAULT '')").run();
+  await db.prepare("CREATE TABLE IF NOT EXISTS ms_exams (id INTEGER PRIMARY KEY AUTOINCREMENT, school_id INTEGER, class_id INTEGER, title TEXT DEFAULT '', subject TEXT DEFAULT '', question_ids TEXT DEFAULT '[]', duration_min INTEGER DEFAULT 20, start_at TEXT DEFAULT '', end_at TEXT DEFAULT '', status TEXT DEFAULT 'draft', created_by TEXT DEFAULT '', created_at TEXT DEFAULT '', published_at TEXT DEFAULT '')").run();
+  await db.prepare("CREATE TABLE IF NOT EXISTS ms_exam_attempts (id INTEGER PRIMARY KEY AUTOINCREMENT, school_id INTEGER, exam_id INTEGER, student_id INTEGER, answers TEXT DEFAULT '{}', manual_scores TEXT DEFAULT '{}', score REAL DEFAULT 0, max_score REAL DEFAULT 0, auto_score REAL DEFAULT 0, started_at TEXT DEFAULT '', submitted_at TEXT DEFAULT '', status TEXT DEFAULT 'in_progress', late INTEGER DEFAULT 0)").run();
+  await db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS ux_ms_exam_attempt ON ms_exam_attempts (exam_id, student_id)").run();
   await db
     .prepare(`CREATE TABLE IF NOT EXISTS ms_tg_msgmap (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -2352,6 +2356,313 @@ export async function handleMultiSchoolRequest(
       if (body.audience !== "teachers") await msTgBroadcast(db, deps, schoolId, cid, `📢 اطلاعیه: ${title}\n${text.slice(0, 300)}`);
       return jsonOut({ ok: true });
     }
+  }
+
+  // ==================== 📝 آزمون آنلاین + 🗄 بانک سوال ====================
+  const examTeacherOk = async (cid: number): Promise<boolean> => {
+    if (isAdmin) return true;
+    if (!isTeacher) return false;
+    const t: any = await db.prepare("SELECT * FROM ms_teachers WHERE id = ? AND school_id = ?").bind(Number(tok.teacherId || 0), schoolId).first();
+    if (!t) return false;
+    if (!cid) return true;
+    const subs = parseSubjects(t.subjects);
+    return String(cid) in subs;
+  };
+  const examLoad = async (examId: number): Promise<any | null> => {
+    const e: any = await db.prepare("SELECT * FROM ms_exams WHERE id = ? AND school_id = ?").bind(examId, schoolId).first();
+    return e || null;
+  };
+  const examQuestions = async (e: any): Promise<any[]> => {
+    let ids: any[] = [];
+    try { ids = JSON.parse(String(e.question_ids || "[]")); } catch { ids = []; }
+    const out: any[] = [];
+    for (const qid of ids) {
+      const q: any = await db.prepare("SELECT * FROM ms_questions WHERE id = ? AND school_id = ?").bind(Number(qid), schoolId).first();
+      if (q) {
+        let opts: any[] = [];
+        try { opts = JSON.parse(String(q.options || "[]")); } catch { opts = []; }
+        out.push({ id: Number(q.id), qtype: String(q.qtype || "mcq"), text: String(q.text || ""), options: opts, answer: String(q.answer ?? "") });
+      }
+    }
+    return out;
+  };
+  const examDeadline = (e: any, startedAt: string): Date => {
+    const dur = Number(e.duration_min || 20) * 60 * 1000;
+    let dl = new Date(new Date(startedAt).getTime() + dur);
+    if (String(e.end_at || "")) {
+      const end = new Date(String(e.end_at));
+      if (!isNaN(end.getTime()) && end < dl) dl = end;
+    }
+    return dl;
+  };
+
+  // ---------- 🗄 بانک سوال ----------
+  if (path === "/api/ms/teacher/questions" && request.method === "GET" && (isTeacher || isAdmin)) {
+    const rows = await db.prepare("SELECT * FROM ms_questions WHERE school_id = ? ORDER BY id DESC LIMIT 300").bind(schoolId).all();
+    return jsonOut({
+      questions: ((rows.results || []) as any[]).map((q) => {
+        let opts: any[] = [];
+        try { opts = JSON.parse(String(q.options || "[]")); } catch { opts = []; }
+        return { id: Number(q.id), classId: Number(q.class_id || 0), subject: String(q.subject || ""), chapter: String(q.chapter || ""), qtype: String(q.qtype || "mcq"), text: String(q.text || ""), options: opts, answer: String(q.answer ?? ""), createdBy: String(q.created_by || "") };
+      }),
+    });
+  }
+  if (path === "/api/ms/teacher/questions" && request.method === "POST" && (isTeacher || isAdmin)) {
+    const body = (await request.json().catch(() => ({}))) as any;
+    const qtype = String(body.qtype || "mcq");
+    const text = String(body.text || "").trim();
+    const subject = String(body.subject || "").trim();
+    const chapter = String(body.chapter || "").trim();
+    if (!["mcq", "tf", "text"].includes(qtype)) return jsonOut({ error: "نوع سوال نامعتبر است." }, 400);
+    if (text.length < 3) return jsonOut({ error: "متن سوال کوتاه است." }, 400);
+    let options: string[] = [];
+    let answer = String(body.answer ?? "").trim();
+    if (qtype === "mcq") {
+      options = (Array.isArray(body.options) ? body.options : []).map((o: any) => String(o ?? "").trim()).slice(0, 4);
+      while (options.length < 4) options.push("");
+      const filled = options.filter((o) => o).length;
+      if (filled < 2) return jsonOut({ error: "حداقل دو گزینه لازم است." }, 400);
+      const ai = Number(answer);
+      if (!isFinite(ai) || ai < 0 || ai > 3 || !options[ai]) return jsonOut({ error: "گزینه‌ی درست را مشخص کنید." }, 400);
+      answer = String(ai);
+    } else if (qtype === "tf") {
+      options = ["درست", "نادرست"];
+      if (answer !== "true" && answer !== "false") return jsonOut({ error: "پاسخ «درست/نادرست» را انتخاب کنید." }, 400);
+    } else {
+      options = [];
+      answer = "";
+    }
+    const r = await db
+      .prepare("INSERT INTO ms_questions (school_id, class_id, subject, chapter, qtype, text, options, answer, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+      .bind(schoolId, Number(body.classId || 0), subject, chapter, qtype, text, JSON.stringify(options), answer, String(body.createdBy || "").trim() || "معلم", nowIso())
+      .run();
+    return jsonOut({ ok: true, id: Number((r as any)?.meta?.last_row_id || 0) });
+  }
+  if (path === "/api/ms/teacher/questions/delete" && request.method === "POST" && (isTeacher || isAdmin)) {
+    const body = (await request.json().catch(() => ({}))) as any;
+    await db.prepare("DELETE FROM ms_questions WHERE id = ? AND school_id = ?").bind(Number(body.id || 0), schoolId).run();
+    return jsonOut({ ok: true });
+  }
+
+  // ---------- 📝 آزمون‌ها ----------
+  if (path === "/api/ms/teacher/exams" && request.method === "GET" && (isTeacher || isAdmin)) {
+    const rows = await db.prepare("SELECT * FROM ms_exams WHERE school_id = ? ORDER BY id DESC LIMIT 100").bind(schoolId).all();
+    const out: any[] = [];
+    for (const e of ((rows.results || []) as any[])) {
+      const att = await db.prepare("SELECT COUNT(*) c, SUM(CASE WHEN status != 'in_progress' THEN 1 ELSE 0 END) sub FROM ms_exam_attempts WHERE exam_id = ?").bind(Number(e.id)).first();
+      const cls: any = await db.prepare("SELECT grade_name, class_name FROM ms_classes WHERE id = ?").bind(Number(e.class_id)).first();
+      out.push({
+        id: Number(e.id), classId: Number(e.class_id), title: String(e.title || ""), subject: String(e.subject || ""),
+        durationMin: Number(e.duration_min || 20), status: String(e.status || "draft"), endAt: String(e.end_at || ""),
+        classLabel: cls ? String(cls.grade_name || "") + " - " + String(cls.class_name || "") : "",
+        students: Number((att as any)?.c || 0), submitted: Number((att as any)?.sub || 0),
+      });
+    }
+    return jsonOut({ exams: out });
+  }
+  if (path === "/api/ms/teacher/exams" && request.method === "POST" && (isTeacher || isAdmin)) {
+    const body = (await request.json().catch(() => ({}))) as any;
+    const title = String(body.title || "").trim();
+    const classId = Number(body.classId || 0);
+    const questionIds = (Array.isArray(body.questionIds) ? body.questionIds : []).map(Number).filter((x: number) => isFinite(x) && x > 0);
+    const durationMin = Math.max(1, Math.min(240, Number(body.durationMin || 20)));
+    if (title.length < 2) return jsonOut({ error: "عنوان آزمون کوتاه است." }, 400);
+    if (!classId || !(await examTeacherOk(classId))) return jsonOut({ error: "این کلاس در اختیار شما نیست." }, 403);
+    if (!questionIds.length) return jsonOut({ error: "حداقل یک سوال از بانک انتخاب کنید." }, 400);
+    for (const qid of questionIds) {
+      const q: any = await db.prepare("SELECT id FROM ms_questions WHERE id = ? AND school_id = ?").bind(qid, schoolId).first();
+      if (!q) return jsonOut({ error: "یکی از سوال‌ها یافت نشد." }, 404);
+    }
+    const r = await db
+      .prepare("INSERT INTO ms_exams (school_id, class_id, title, subject, question_ids, duration_min, start_at, end_at, status, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?)")
+      .bind(schoolId, classId, title, String(body.subject || "").trim(), JSON.stringify(questionIds), durationMin, String(body.startAt || ""), String(body.endAt || ""), String(body.createdBy || "").trim() || "معلم", nowIso())
+      .run();
+    return jsonOut({ ok: true, id: Number((r as any)?.meta?.last_row_id || 0) });
+  }
+  if (path === "/api/ms/teacher/exams/publish" && request.method === "POST" && (isTeacher || isAdmin)) {
+    const body = (await request.json().catch(() => ({}))) as any;
+    const e = await examLoad(Number(body.examId || 0));
+    if (!e) return jsonOut({ error: "آزمون یافت نشد." }, 404);
+    if (!(await examTeacherOk(Number(e.class_id || 0)))) return jsonOut({ error: "این کلاس در اختیار شما نیست." }, 403);
+    const open = body.open !== false;
+    await db.prepare("UPDATE ms_exams SET status = ?, published_at = ? WHERE id = ?").bind(open ? "open" : "closed", open ? nowIso() : String(e.published_at || ""), Number(e.id)).run();
+    if (open) {
+      await msTgBroadcast(db, deps, schoolId, Number(e.class_id || 0), "📝 آزمون جدید: «" + String(e.title || "") + "»\nمدت: " + Number(e.duration_min || 20) + " دقیقه — از اپ مدرسه شروع کنید." + (String(e.end_at || "") ? "\n⏰ مهلت: " + String(e.end_at).slice(0, 16).replace("T", " ") : ""));
+    }
+    return jsonOut({ ok: true, status: open ? "open" : "closed" });
+  }
+  if (path === "/api/ms/teacher/exams/delete" && request.method === "POST" && (isTeacher || isAdmin)) {
+    const body = (await request.json().catch(() => ({}))) as any;
+    const e = await examLoad(Number(body.examId || 0));
+    if (!e) return jsonOut({ error: "آزمون یافت نشد." }, 404);
+    await db.prepare("DELETE FROM ms_exam_attempts WHERE exam_id = ?").bind(Number(e.id)).run();
+    await db.prepare("DELETE FROM ms_exams WHERE id = ?").bind(Number(e.id)).run();
+    return jsonOut({ ok: true });
+  }
+  if (path === "/api/ms/teacher/exams/results" && request.method === "GET" && (isTeacher || isAdmin)) {
+    const e = await examLoad(Number(url.searchParams.get("examId") || 0));
+    if (!e) return jsonOut({ error: "آزمون یافت نشد." }, 404);
+    const qs = await examQuestions(e);
+    const atts = await db.prepare("SELECT a.*, s.name AS sname FROM ms_exam_attempts a LEFT JOIN ms_students s ON s.id = a.student_id WHERE a.exam_id = ? ORDER BY a.id").bind(Number(e.id)).all();
+    const attempts: any[] = ((atts.results || []) as any[]).map((a) => {
+      let answers: any = {};
+      let manual: any = {};
+      try { answers = JSON.parse(String(a.answers || "{}")); } catch {}
+      try { manual = JSON.parse(String(a.manual_scores || "{}")); } catch {}
+      return {
+        studentId: Number(a.student_id), name: String(a.sname || "؟"), answers, manual,
+        score: Number(a.score || 0), maxScore: Number(a.max_score || 0), autoScore: Number(a.auto_score || 0),
+        status: String(a.status || ""), late: Number(a.late || 0) === 1, submittedAt: String(a.submitted_at || ""),
+      };
+    });
+    const qStats = qs.map((q) => {
+      let correct = 0, answered = 0;
+      for (const a of attempts) {
+        if (a.status === "in_progress") continue;
+        answered++;
+        const an = String((a.answers || {})[String(q.id)] ?? "");
+        if (q.qtype !== "text" && an === q.answer) correct++;
+      }
+      return { id: q.id, qtype: q.qtype, text: q.text, correct, answered, pct: answered ? Math.round((correct / answered) * 100) : 0 };
+    });
+    const done = attempts.filter((a) => a.status !== "in_progress");
+    const scores = done.map((a) => a.score);
+    return jsonOut({
+      exam: { id: Number(e.id), title: String(e.title || ""), subject: String(e.subject || ""), classId: Number(e.class_id), durationMin: Number(e.duration_min || 20), status: String(e.status || ""), endAt: String(e.end_at || "") },
+      questions: qs,
+      attempts,
+      qStats,
+      stats: {
+        total: attempts.length, submitted: done.length,
+        avg: scores.length ? Math.round((scores.reduce((x, y) => x + y, 0) / scores.length) * 100) / 100 : 0,
+        max: scores.length ? Math.max(...scores) : 0, min: scores.length ? Math.min(...scores) : 0,
+      },
+    });
+  }
+  if (path === "/api/ms/teacher/exams/grade" && request.method === "POST" && (isTeacher || isAdmin)) {
+    const body = (await request.json().catch(() => ({}))) as any;
+    const e = await examLoad(Number(body.examId || 0));
+    if (!e) return jsonOut({ error: "آزمون یافت نشد." }, 404);
+    if (!(await examTeacherOk(Number(e.class_id || 0)))) return jsonOut({ error: "این کلاس در اختیار شما نیست." }, 403);
+    const att: any = await db.prepare("SELECT * FROM ms_exam_attempts WHERE exam_id = ? AND student_id = ?").bind(Number(e.id), Number(body.studentId || 0)).first();
+    if (!att || String(att.status || "") === "in_progress") return jsonOut({ error: "پاسخی از این دانش‌آموز ثبت نشده است." }, 404);
+    let manual: any = {};
+    try { manual = JSON.parse(String(att.manual_scores || "{}")); } catch {}
+    const scoresIn = body.scores && typeof body.scores === "object" ? body.scores : {};
+    for (const k of Object.keys(scoresIn)) {
+      const v = msNum(scoresIn[k]);
+      if (isFinite(v) && v >= 0) manual[String(k)] = v;
+    }
+    const qs = await examQuestions(e);
+    let total = Number(att.auto_score || 0);
+    for (const q of qs) if (q.qtype === "text") total += Number(manual[String(q.id)] || 0);
+    total = Math.round(total * 100) / 100;
+    await db.prepare("UPDATE ms_exam_attempts SET manual_scores = ?, score = ?, status = 'graded' WHERE id = ?").bind(JSON.stringify(manual), total, Number(att.id)).run();
+    await msTgNotifyStudent(db, deps, schoolId, Number(body.studentId || 0), "📝 نمره آزمون «" + String(e.title || "") + "»: " + total + " از " + qs.length + "\nاز اپ مدرسه جزئیات را ببین.");
+    return jsonOut({ ok: true, score: total });
+  }
+
+  // ---------- 📝 آزمون‌های دانش‌آموز ----------
+  if (path === "/api/ms/student/exams" && request.method === "GET" && (isStudent || isParent)) {
+    const stId = Number(tok.studentId || 0);
+    const st: any = await db.prepare("SELECT * FROM ms_students WHERE id = ? AND school_id = ?").bind(stId, schoolId).first();
+    if (!st) return jsonOut({ error: "دانش‌آموز یافت نشد." }, 404);
+    const rows = await db.prepare("SELECT * FROM ms_exams WHERE school_id = ? AND class_id = ? AND status != 'draft' ORDER BY id DESC LIMIT 50").bind(schoolId, Number(st.class_id)).all();
+    const out: any[] = [];
+    for (const e of ((rows.results || []) as any[])) {
+      const att: any = await db.prepare("SELECT * FROM ms_exam_attempts WHERE exam_id = ? AND student_id = ?").bind(Number(e.id), stId).first();
+      let qCount = 0;
+      try { qCount = (JSON.parse(String(e.question_ids || "[]")) || []).length; } catch {}
+      out.push({
+        id: Number(e.id), title: String(e.title || ""), subject: String(e.subject || ""), durationMin: Number(e.duration_min || 20),
+        status: String(e.status || ""), endAt: String(e.end_at || ""), questionCount: qCount,
+        myAttempt: att ? { status: String(att.status || ""), score: Number(att.score || 0), maxScore: Number(att.max_score || 0), late: Number(att.late || 0) === 1, submittedAt: String(att.submitted_at || "") } : null,
+      });
+    }
+    return jsonOut({ exams: out, now: new Date().toISOString() });
+  }
+  if (path === "/api/ms/student/exams/start" && request.method === "POST" && isStudent) {
+    const body = (await request.json().catch(() => ({}))) as any;
+    const e = await examLoad(Number(body.examId || 0));
+    if (!e || String(e.status || "") !== "open") return jsonOut({ error: "آزمون در دسترس نیست." }, 404);
+    const stId = Number(tok.studentId || 0);
+    const st: any = await db.prepare("SELECT * FROM ms_students WHERE id = ? AND school_id = ?").bind(stId, schoolId).first();
+    if (!st || Number(st.class_id) !== Number(e.class_id)) return jsonOut({ error: "این آزمون مال کلاس شما نیست." }, 403);
+    let att: any = await db.prepare("SELECT * FROM ms_exam_attempts WHERE exam_id = ? AND student_id = ?").bind(Number(e.id), stId).first();
+    if (att && String(att.status || "") !== "in_progress") return jsonOut({ error: "شما قبلاً در این آزمون شرکت کرده‌اید؛ نمره‌ی شما " + Number(att.score || 0) + " از " + Number(att.max_score || 0) + " است." }, 400);
+    if (!att) {
+      const started = nowIso();
+      if (String(e.end_at || "") && new Date() > new Date(String(e.end_at))) return jsonOut({ error: "مهلت آزمون تمام شده است." }, 400);
+      const r = await db
+        .prepare("INSERT INTO ms_exam_attempts (school_id, exam_id, student_id, started_at, max_score, status) VALUES (?, ?, ?, ?, ?, 'in_progress')")
+        .bind(schoolId, Number(e.id), stId, started, 0)
+        .run();
+      att = { id: Number((r as any)?.meta?.last_row_id || 0), started_at: started };
+    }
+    const qs = await examQuestions(e);
+    await db.prepare("UPDATE ms_exam_attempts SET max_score = ? WHERE id = ?").bind(qs.length, Number(att.id)).run();
+    const dl = examDeadline(e, String(att.started_at || nowIso()));
+    return jsonOut({
+      exam: { id: Number(e.id), title: String(e.title || ""), subject: String(e.subject || ""), durationMin: Number(e.duration_min || 20) },
+      deadline: dl.toISOString(),
+      now: new Date().toISOString(),
+      questions: qs.map((q) => ({ id: q.id, qtype: q.qtype, text: q.text, options: q.options })),
+    });
+  }
+  if (path === "/api/ms/student/exams/submit" && request.method === "POST" && isStudent) {
+    const body = (await request.json().catch(() => ({}))) as any;
+    const e = await examLoad(Number(body.examId || 0));
+    if (!e) return jsonOut({ error: "آزمون یافت نشد." }, 404);
+    const stId = Number(tok.studentId || 0);
+    const att: any = await db.prepare("SELECT * FROM ms_exam_attempts WHERE exam_id = ? AND student_id = ?").bind(Number(e.id), stId).first();
+    if (!att || String(att.status || "") !== "in_progress") return jsonOut({ error: "آزمون شما قبلاً ثبت شده است." }, 400);
+    const qs = await examQuestions(e);
+    const answersIn = body.answers && typeof body.answers === "object" ? body.answers : {};
+    const answers: any = {};
+    for (const q of qs) answers[String(q.id)] = String(answersIn[String(q.id)] ?? "").slice(0, 2000);
+    let auto = 0;
+    for (const q of qs) {
+      if (q.qtype === "text") continue;
+      if (answers[String(q.id)] === q.answer) auto++;
+    }
+    const dl = examDeadline(e, String(att.started_at || nowIso()));
+    const late = new Date() > new Date(dl.getTime() + 2 * 60 * 1000);
+    const hasText = qs.some((q) => q.qtype === "text");
+    const status = hasText ? "submitted" : "graded";
+    await db
+      .prepare("UPDATE ms_exam_attempts SET answers = ?, auto_score = ?, score = ?, status = ?, late = ?, submitted_at = ? WHERE id = ?")
+      .bind(JSON.stringify(answers), auto, auto, status, late ? 1 : 0, nowIso(), Number(att.id))
+      .run();
+    if (!hasText) {
+      await msTgNotifyStudent(db, deps, schoolId, stId, "📝 نمره آزمون «" + String(e.title || "") + "»: " + auto + " از " + qs.length + " ⭐\nاز اپ مدرسه جزئیات را ببین.");
+    }
+    return jsonOut({ ok: true, score: auto, maxScore: qs.length, late, needsGrading: hasText });
+  }
+  if (path === "/api/ms/student/exams/result" && request.method === "GET" && (isStudent || isParent)) {
+    const stId = Number(tok.studentId || 0);
+    const e = await examLoad(Number(url.searchParams.get("examId") || 0));
+    if (!e) return jsonOut({ error: "آزمون یافت نشد." }, 404);
+    const att: any = await db.prepare("SELECT * FROM ms_exam_attempts WHERE exam_id = ? AND student_id = ?").bind(Number(e.id), stId).first();
+    if (!att || String(att.status || "") === "in_progress") return jsonOut({ error: "هنوز پاسخی ثبت نشده است." }, 404);
+    const qs = await examQuestions(e);
+    let answers: any = {};
+    let manual: any = {};
+    try { answers = JSON.parse(String(att.answers || "{}")); } catch {}
+    try { manual = JSON.parse(String(att.manual_scores || "{}")); } catch {}
+    return jsonOut({
+      exam: { id: Number(e.id), title: String(e.title || ""), subject: String(e.subject || "") },
+      score: Number(att.score || 0), maxScore: qs.length, status: String(att.status || ""), late: Number(att.late || 0) === 1,
+      questions: qs.map((q) => {
+        const mine = String(answers[String(q.id)] ?? "");
+        const manV = manual[String(q.id)];
+        return {
+          id: q.id, qtype: q.qtype, text: q.text, options: q.options, mine,
+          correct: q.qtype !== "text" ? q.answer : "",
+          isCorrect: q.qtype !== "text" ? mine === q.answer : null,
+          manualScore: manV === undefined ? null : Number(manV),
+        };
+      }),
+    });
   }
 
   // ==================== پنل مدیر مدرسه ====================

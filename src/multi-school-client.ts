@@ -598,6 +598,7 @@ const SCHOOL_JS = String.raw`
                 '<button class="menu-item" onclick="activeTab=\'quiz\';renderApp()"><span>📝</span>کوییز هوشمند</button>' +
                 '<button class="menu-item" onclick="activeTab=\'lab\';renderApp()"><span>🧠</span>کارگاه یادگیری</button>' +
                 '<button class="menu-item" onclick="activeTab=\'hw\';renderApp()"><span>📚</span>تکالیف من</button>' +
+                '<button class="menu-item" onclick="goTab(\'exams\')"><span>📝</span>آزمون‌های من</button>' +
               '</div>' +
               '<div class="section-title">🎯 پیشرفت</div>' +
               '<div class="menu-grid">' +
@@ -650,6 +651,15 @@ const SCHOOL_JS = String.raw`
             '<div class="card"><table class="table"><thead><tr><th>تاریخ</th><th>وضعیت</th></tr></thead><tbody>' + attHtml + '</tbody></table></div>' +
             '<div class="section-title">🏅 امتیازات رفتاری</div>' +
             '<div class="card"><table class="table"><thead><tr><th>امتیاز</th><th>دلیل</th><th>تاریخ</th></tr></thead><tbody>' + ptsHtml + '</tbody></table></div>';
+        } else if (activeTab === "exams") {
+          await renderStudentExams(main);
+          return;
+        } else if (activeTab === "examtaking") {
+          await renderExamTake(main);
+          return;
+        } else if (activeTab === "examresult") {
+          await renderExamResult(main);
+          return;
         } else if (activeTab === "hw") {
           await renderStudentHw(main);
           return;
@@ -784,6 +794,15 @@ const SCHOOL_JS = String.raw`
           return;
         } else if (activeTab === "pchat" || activeTab === "msgm") {
           await renderMsgM(main);
+          return;
+        } else if (activeTab === "qbank") {
+          await renderQBank(main);
+          return;
+        } else if (activeTab === "exams") {
+          await renderTeacherExams(main);
+          return;
+        } else if (activeTab === "examres") {
+          await renderExamResults(main);
           return;
         } else if (activeTab === "hw") {
           await renderTeacherHw(main);
@@ -1794,6 +1813,391 @@ const SCHOOL_JS = String.raw`
         if (pv) { pv.src = data; pv.style.display = "inline-block"; }
         showToast("🎥 ویدیو آماده ارسال است");
       });
+    }
+
+    // ==================== 📝 آزمون آنلاین + 🗄 بانک سوال ====================
+    var QTYPE_LABELS = { mcq: "چهارگزینه‌ای", tf: "درست / نادرست", text: "تشریحی (تصحیح معلم)" };
+
+    async function renderQBank(main) {
+      try {
+        var d = await api("/api/ms/teacher/questions");
+        main.innerHTML =
+          classSwitcherHtml() +
+          '<div class="section-title">🗄 بانک سوال</div>' +
+          '<div class="card">' +
+            '<div class="section-title">➕ سوال جدید</div>' +
+            '<select id="qb_type" class="input" onchange="qTypeChanged(this.value)">' +
+              '<option value="mcq">چهارگزینه‌ای</option><option value="tf">درست / نادرست</option><option value="text">تشریحی</option>' +
+            '</select>' +
+            '<textarea id="qb_text" class="input" placeholder="متن سوال..." rows="2" style="margin-top:8px;"></textarea>' +
+            '<div id="qb_opts">' +
+              '<input id="qb_o0" class="input" placeholder="گزینه ۱" style="margin-top:6px;" />' +
+              '<input id="qb_o1" class="input" placeholder="گزینه ۲" style="margin-top:6px;" />' +
+              '<input id="qb_o2" class="input" placeholder="گزینه ۳" style="margin-top:6px;" />' +
+              '<input id="qb_o3" class="input" placeholder="گزینه ۴" style="margin-top:6px;" />' +
+            '</div>' +
+            '<div id="qb_ans_wrap" style="margin-top:6px;">پاسخ درست: <select id="qb_ans" class="input">' +
+              '<option value="0">گزینه ۱</option><option value="1">گزینه ۲</option><option value="2">گزینه ۳</option><option value="3">گزینه ۴</option>' +
+            '</select></div>' +
+            '<input id="qb_subject" class="input" placeholder="درس (مثلاً ریاضی)" style="margin-top:6px;" />' +
+            '<input id="qb_chapter" class="input" placeholder="فصل یا موضوع (اختیاری)" style="margin-top:6px;" />' +
+            '<button class="btn btn-emerald" style="margin-top:10px;" onclick="qbankSave()">➕ افزودن به بانک</button>' +
+          '</div>' +
+          '<div class="section-title">📚 سوال‌های بانک (' + (d.questions || []).length + ')</div>' +
+          ((d.questions || []).length
+            ? (d.questions || []).map(function (q) {
+                return '<div class="card"><div style="display:flex;gap:8px;align-items:flex-start;">' +
+                  '<div style="flex:1;"><b>' + esc(q.text) + '</b>' +
+                  '<div class="muted" style="font-size:11px;margin-top:4px;">' + (QTYPE_LABELS[q.qtype] || q.qtype) + (q.subject ? " • " + esc(q.subject) : "") + (q.chapter ? " • " + esc(q.chapter) : "") + '</div>' +
+                  (q.qtype === "mcq"
+                    ? '<div class="muted" style="font-size:11px;margin-top:3px;">گزینه‌ها: ' + q.options.map(function (o, i2) { return o ? (i2 + 1) + ") " + esc(o) : ""; }).filter(Boolean).join(" | ") + ' — پاسخ درست: گزینه ' + (Number(q.answer) + 1) + '</div>'
+                    : q.qtype === "tf"
+                    ? '<div class="muted" style="font-size:11px;">پاسخ درست: ' + (q.answer === "true" ? "درست" : "نادرست") + '</div>'
+                    : '<div class="muted" style="font-size:11px;">تصحیح دستی توسط معلم</div>') +
+                  '</div>' +
+                  '<button class="btn btn-ghost btn-sm" onclick="qbankDel(' + q.id + ')">🗑</button>' +
+                '</div></div>';
+              }).join("")
+            : '<div class="card"><div class="muted">هنوز سوالی ثبت نشده — از فرم بالا اولین سوال را اضافه کنید.</div></div>') +
+          backBtnHtml();
+      } catch (e) { main.innerHTML = '<div class="card">❌ ' + esc(e.message) + '</div>'; }
+    }
+
+    function qTypeChanged(v) {
+      var o = document.getElementById("qb_opts");
+      var a = document.getElementById("qb_ans_wrap");
+      if (v === "mcq") {
+        o.style.display = ""; a.style.display = "";
+        document.getElementById("qb_ans").innerHTML = '<option value="0">گزینه ۱</option><option value="1">گزینه ۲</option><option value="2">گزینه ۳</option><option value="3">گزینه ۴</option>';
+      } else if (v === "tf") {
+        o.style.display = "none"; a.style.display = "";
+        document.getElementById("qb_ans").innerHTML = '<option value="true">درست</option><option value="false">نادرست</option>';
+      } else { o.style.display = "none"; a.style.display = "none"; }
+    }
+
+    async function qbankSave() {
+      try {
+        var t = document.getElementById("qb_type").value;
+        var body = { qtype: t, text: document.getElementById("qb_text").value.trim(), subject: document.getElementById("qb_subject").value.trim(), chapter: document.getElementById("qb_chapter").value.trim() };
+        if (t === "mcq") {
+          body.options = [document.getElementById("qb_o0").value, document.getElementById("qb_o1").value, document.getElementById("qb_o2").value, document.getElementById("qb_o3").value];
+          body.answer = Number(document.getElementById("qb_ans").value);
+        } else if (t === "tf") {
+          body.answer = document.getElementById("qb_ans").value;
+        } else { body.answer = ""; }
+        await api("/api/ms/teacher/questions", body);
+        showToast("✅ سوال به بانک اضافه شد");
+        renderApp();
+      } catch (e) { showToast("❌ " + e.message); }
+    }
+
+    async function qbankDel(id) {
+      if (!confirm("این سوال از بانک حذف شود؟")) return;
+      try { await api("/api/ms/teacher/questions/delete", { id: id }); showToast("🗑 سوال حذف شد"); renderApp(); } catch (e) { showToast("❌ " + e.message); }
+    }
+
+    async function renderTeacherExams(main) {
+      try {
+        var d = await api("/api/ms/teacher/exams");
+        var qd = await api("/api/ms/teacher/questions");
+        var clsId = (typeof selClassId !== "undefined" && selClassId) ? selClassId : ((msData && msData.classes && msData.classes[0]) ? msData.classes[0].id : 0);
+        var qBySubj = {};
+        (qd.questions || []).forEach(function (q) {
+          var k = q.subject || "عمومی";
+          if (!qBySubj[k]) qBySubj[k] = [];
+          qBySubj[k].push(q);
+        });
+        var pickHtml = Object.keys(qBySubj).map(function (k) {
+          return '<div style="margin-top:8px;"><b style="font-size:12px;">📚 ' + esc(k) + '</b>' +
+            qBySubj[k].map(function (q) {
+              return '<label style="display:flex;gap:6px;align-items:flex-start;font-size:12px;margin-top:5px;cursor:pointer;">' +
+                '<input type="checkbox" class="ex_q" value="' + q.id + '" style="margin-top:2px;" />' +
+                '<span>' + esc(q.text) + ' <span class="muted">(' + (QTYPE_LABELS[q.qtype] || q.qtype) + ')</span></span>' +
+              '</label>';
+            }).join("") + '</div>';
+        }).join("");
+        main.innerHTML =
+          classSwitcherHtml() +
+          '<div class="section-title">📝 آزمون‌های کلاس</div>' +
+          ((d.exams || []).length
+            ? (d.exams || []).map(function (e) {
+                var stTxt = e.status === "open" ? "🟢 منتشرشده" : e.status === "closed" ? "🔴 بسته‌شده" : "⚪ پیش‌نویس";
+                return '<div class="card">' +
+                  '<div style="display:flex;align-items:center;gap:8px;">' +
+                    '<div style="flex:1;"><b>' + esc(e.title) + '</b>' + (e.subject ? ' <span class="muted">• ' + esc(e.subject) + '</span>' : "") +
+                    '<div class="muted" style="font-size:11px;margin-top:3px;">' + stTxt + ' • ⏱ ' + e.durationMin + ' دقیقه • 👥 ' + e.submitted + " از " + e.students + ' شرکت‌کننده' + (e.endAt ? " • مهلت: " + String(e.endAt).slice(0, 16).replace("T", " ") : "") + '</div></div>' +
+                    '<button class="btn btn-emerald btn-sm" onclick="examResultsOpen(' + e.id + ')">📊 نتایج</button>' +
+                    (e.status === "draft"
+                      ? '<button class="btn btn-gold btn-sm" onclick="examPublish(' + e.id + ', 1)">📣 انتشار</button>'
+                      : e.status === "open"
+                      ? '<button class="btn btn-ghost btn-sm" onclick="examPublish(' + e.id + ', 0)">⏸ بستن</button>'
+                      : '<button class="btn btn-ghost btn-sm" onclick="examPublish(' + e.id + ', 1)">▶️ بازگشایی</button>') +
+                    '<button class="btn btn-ghost btn-sm" onclick="examDel(' + e.id + ')">🗑</button>' +
+                  '</div></div>';
+              }).join("")
+            : '<div class="card"><div class="muted">هنوز آزمونی ساخته نشده است.</div></div>') +
+          '<div class="card">' +
+            '<div class="section-title">➕ ساخت آزمون جدید</div>' +
+            '<input id="ex_title" class="input" placeholder="عنوان آزمون (مثلاً ریاضی فصل ۳)" />' +
+            '<input id="ex_subject" class="input" placeholder="درس" style="margin-top:6px;" />' +
+            '<div style="display:flex;gap:8px;margin-top:6px;">' +
+              '<input id="ex_dur" class="input" placeholder="مدت (دقیقه)" value="20" style="flex:1;" />' +
+              '<input id="ex_end" class="input" type="datetime-local" placeholder="مهلت نهایی" style="flex:2;" />' +
+            '</div>' +
+            '<div style="margin-top:8px;font-size:12px;"><b>انتخاب سوال از بانک:</b> (' + (qd.questions || []).length + ' سوال موجود)' +
+              (pickHtml || '<div class="muted" style="margin-top:6px;">ابتدا از «بانک سوال» سوال اضافه کنید.</div>') +
+            '</div>' +
+            '<button class="btn btn-emerald" style="margin-top:10px;" onclick="examCreate()">➕ ساخت آزمون</button>' +
+          '</div>' +
+          backBtnHtml();
+      } catch (e) { main.innerHTML = '<div class="card">❌ ' + esc(e.message) + '</div>'; }
+    }
+
+    async function examCreate() {
+      try {
+        var ids = Array.prototype.map.call(document.querySelectorAll(".ex_q:checked"), function (x) { return Number(x.value); });
+        if (!ids.length) return showToast("حداقل یک سوال انتخاب کنید");
+        var clsId = (typeof selClassId !== "undefined" && selClassId) ? selClassId : ((msData && msData.classes && msData.classes[0]) ? msData.classes[0].id : 0);
+        var endV = document.getElementById("ex_end").value;
+        await api("/api/ms/teacher/exams", {
+            classId: clsId,
+            title: document.getElementById("ex_title").value.trim(),
+            subject: document.getElementById("ex_subject").value.trim(),
+            durationMin: Number(document.getElementById("ex_dur").value || 20),
+            endAt: endV ? new Date(endV).toISOString() : "",
+            questionIds: ids
+        });
+        showToast("✅ آزمون ساخته شد — برای دانش‌آموزان منتشرش کنید");
+        renderApp();
+      } catch (e) { showToast("❌ " + e.message); }
+    }
+
+    async function examPublish(id, open) {
+      try {
+        await api("/api/ms/teacher/exams/publish", { examId: id, open: !!open });
+        showToast(open ? "📣 آزمون منتشر شد — به دانش‌آموزان اطلاع داده می‌شود" : "⏸ آزمون بسته شد");
+        renderApp();
+      } catch (e) { showToast("❌ " + e.message); }
+    }
+
+    async function examDel(id) {
+      if (!confirm("آزمون و همه‌ی پاسخ‌ها حذف شود؟")) return;
+      try { await api("/api/ms/teacher/exams/delete", { examId: id }); showToast("🗑 حذف شد"); renderApp(); } catch (e) { showToast("❌ " + e.message); }
+    }
+
+    function examResultsOpen(id) {
+      window._examResId = id;
+      activeTab = "examres";
+      renderApp();
+    }
+
+    async function renderExamResults(main) {
+      try {
+        var d = await api("/api/ms/teacher/exams/results?examId=" + Number(window._examResId || 0));
+        var pendingRows = (d.attempts || []).filter(function (a) { return a.status === "submitted"; });
+        main.innerHTML =
+          '<div class="section-title">📊 نتایج آزمون «' + esc(d.exam.title) + '»</div>' +
+          '<div class="card"><div style="display:flex;gap:10px;flex-wrap:wrap;text-align:center;">' +
+            '<div style="flex:1;"><div class="muted" style="font-size:11px;">شرکت‌کنندگان</div><b style="font-size:20px;">' + d.stats.submitted + " از " + d.stats.total + '</b></div>' +
+            '<div style="flex:1;"><div class="muted" style="font-size:11px;">میانگین</div><b style="font-size:20px;">' + d.stats.avg + '</b></div>' +
+            '<div style="flex:1;"><div class="muted" style="font-size:11px;">بیشترین</div><b style="font-size:20px;">' + d.stats.max + '</b></div>' +
+            '<div style="flex:1;"><div class="muted" style="font-size:11px;">کمترین</div><b style="font-size:20px;">' + d.stats.min + '</b></div>' +
+          '</div></div>' +
+          '<div class="section-title">🔍 تحلیل سوال‌ها</div>' +
+          (d.qStats || []).map(function (q, i2) {
+            return '<div class="card" style="padding:10px;">' +
+              '<div style="font-size:12px;"><b>' + (i2 + 1) + ') ' + esc(q.text) + '</b>' + (q.qtype === "text" ? ' <span class="muted">(تشریحی)</span>' : "") + '</div>' +
+              (q.qtype !== "text"
+                ? '<div style="margin-top:6px;background:var(--surface-2);border-radius:8px;height:10px;overflow:hidden;"><div style="width:' + q.pct + '%;height:100%;background:' + (q.pct >= 60 ? "#10b981" : q.pct >= 30 ? "#f59e0b" : "#ef4444") + ';"></div></div>' +
+                  '<div class="muted" style="font-size:11px;margin-top:3px;">' + q.pct + '% پاسخ درست (' + q.correct + " از " + q.answered + ')' + (q.pct < 40 ? " — ⚠️ سوال سخت بوده" : "") + '</div>'
+                : '<div class="muted" style="font-size:11px;margin-top:3px;">تصحیح دستی</div>') +
+            '</div>';
+          }).join("") +
+          (pendingRows.length
+            ? '<div class="section-title">✍️ تصحیح سوال‌های تشریحی (' + pendingRows.length + ')</div>' +
+              pendingRows.map(function (a) {
+                var texts = (d.questions || []).filter(function (q) { return q.qtype === "text"; });
+                return '<div class="card">' +
+                  '<b>' + esc(a.name) + '</b>' +
+                  texts.map(function (q) {
+                    return '<div style="margin-top:8px;font-size:12px;"><div class="muted">' + esc(q.text) + '</div>' +
+                      '<div style="margin-top:3px;padding:8px;background:var(--surface-2);border-radius:8px;">' + esc((a.answers || {})[String(q.id)] || "—") + '</div>' +
+                      '<div style="display:flex;gap:6px;align-items:center;margin-top:5px;">نمره‌ی این سوال: <input id="gt_' + a.studentId + '_' + q.id + '" class="input" style="width:80px;margin:0;" dir="ltr" placeholder="0" value="' + (a.manual && a.manual[String(q.id)] !== undefined ? a.manual[String(q.id)] : "") + '" /></div>' +
+                    '</div>';
+                  }).join("") +
+                  '<button class="btn btn-emerald btn-sm" style="margin-top:8px;" onclick="examGradeSave(' + a.studentId + ')">✅ ثبت نمرات تشریحی</button>' +
+                '</div>';
+              }).join("")
+            : "") +
+          '<div class="section-title">📋 کارنامه‌ی کلاس</div>' +
+          '<div class="card"><table style="width:100%;font-size:12px;"><thead><tr><th style="text-align:right;">دانش‌آموز</th><th>نمره</th><th>خودکار</th><th>وضعیت</th><th>زمان</th></tr></thead><tbody>' +
+          ((d.attempts || []).length
+            ? (d.attempts || []).map(function (a) {
+                return '<tr><td>' + esc(a.name) + (a.late ? ' <span title="با تاخیر" style="font-size:10px;">⏰</span>' : "") + '</td>' +
+                  '<td style="text-align:center;"><b>' + a.score + '</b> / ' + a.maxScore + '</td>' +
+                  '<td style="text-align:center;">' + a.autoScore + '</td>' +
+                  '<td style="text-align:center;">' + (a.status === "graded" ? "✅ تصحیح‌شده" : a.status === "submitted" ? "✍️ در انتظار تصحیح" : "—") + '</td>' +
+                  '<td class="muted" style="text-align:center;font-size:10.5px;">' + esc(String(a.submittedAt || "").slice(0, 16).replace("T", " ")) + '</td></tr>';
+              }).join("")
+            : '<tr><td colspan="5" class="muted">هنوز کسی شرکت نکرده است.</td></tr>') +
+          '</tbody></table></div>' +
+          backBtnHtml();
+      } catch (e) { main.innerHTML = '<div class="card">❌ ' + esc(e.message) + '</div>'; }
+    }
+
+    async function examGradeSave(studentId) {
+      try {
+        var d = await api("/api/ms/teacher/exams/results?examId=" + Number(window._examResId || 0));
+        var texts = (d.questions || []).filter(function (q) { return q.qtype === "text"; });
+        var scores = {};
+        texts.forEach(function (q) {
+          var el = document.getElementById("gt_" + studentId + "_" + q.id);
+          if (el && el.value.trim() !== "") scores[String(q.id)] = Number(el.value);
+        });
+        var rv = await api("/api/ms/teacher/exams/grade", { examId: Number(window._examResId || 0), studentId: studentId, scores: scores });
+        showToast("✅ نمره ثبت شد: " + (rv && rv.score !== undefined ? rv.score : "") + " — برای دانش‌آموز ارسال شد");
+        renderApp();
+      } catch (e) { showToast("❌ " + e.message); }
+    }
+
+    async function renderStudentExams(main) {
+      try {
+        var d = await api("/api/ms/student/exams");
+        main.innerHTML =
+          '<div class="section-title">📝 آزمون‌های من</div>' +
+          ((d.exams || []).length
+            ? (d.exams || []).map(function (e) {
+                var badge = e.status === "open" ? "🟢 باز" : "🔴 بسته";
+                var act = "";
+                if (e.myAttempt && e.myAttempt.status === "in_progress") {
+                  act = '<button class="btn btn-gold btn-sm" onclick="examStart(' + e.id + ')">▶️ ادامه‌ی آزمون</button>';
+                } else if (!e.myAttempt && e.status === "open") {
+                  act = '<button class="btn btn-emerald btn-sm" onclick="examStart(' + e.id + ')">🚀 شروع آزمون</button>';
+                } else if (e.myAttempt) {
+                  act = '<button class="btn btn-ghost btn-sm" onclick="examShowResult(' + e.id + ')">📄 مشاهده‌ی نتیجه</button>';
+                }
+                return '<div class="card">' +
+                  '<div style="display:flex;align-items:center;gap:8px;">' +
+                    '<div style="flex:1;"><b>' + esc(e.title) + '</b>' + (e.subject ? ' <span class="muted">• ' + esc(e.subject) + '</span>' : "") +
+                    '<div class="muted" style="font-size:11px;margin-top:3px;">' + badge + ' • ⏱ ' + e.durationMin + ' دقیقه • ' + e.questionCount + ' سوال' +
+                    (e.myAttempt && e.myAttempt.status !== "in_progress" ? ' • نمره: <b>' + e.myAttempt.score + '</b> / ' + e.myAttempt.maxScore : "") +
+                    (e.myAttempt && e.myAttempt.late ? " • ⏰ با تاخیر" : "") +
+                    '</div></div>' + act +
+                  '</div></div>';
+              }).join("")
+            : '<div class="card"><div class="muted">فعلاً آزمونی برای کلاس شما منتشر نشده است.</div></div>') +
+          backBtnHtml();
+      } catch (e) { main.innerHTML = '<div class="card">❌ ' + esc(e.message) + '</div>'; }
+    }
+
+    async function examStart(id) {
+      try {
+        var d = await api("/api/ms/student/exams/start", { examId: id });
+        window._examState = { exam: d.exam, questions: d.questions, deadline: d.deadline };
+        activeTab = "examtaking";
+        renderApp();
+      } catch (e) { showToast("❌ " + e.message); }
+    }
+
+    function examShowResult(id) {
+      window._examDoneId = Number(id);
+      activeTab = "examresult";
+      renderApp();
+    }
+
+    async function renderExamTake(main) {
+      if (window._examTimer) { clearInterval(window._examTimer); window._examTimer = null; }
+      var st = window._examState;
+      if (!st) {
+        main.innerHTML = '<div class="card">آزمونی در جریان نیست.</div>' + backBtnHtml();
+        return;
+      }
+      main.innerHTML =
+        '<div class="section-title">📝 ' + esc(st.exam.title) + '</div>' +
+        '<div class="card" style="display:flex;align-items:center;gap:10px;">' +
+          '<b>⏱ زمان باقی‌مانده:</b> <span id="exam_clock" style="font-size:19px;font-weight:bold;color:#f59e0b;" dir="ltr">--:--</span>' +
+          '<span class="muted" style="font-size:11px;">پاسخ‌ها خودکار ذخیره نمی‌شوند — تا پایان، این صفحه را نبندید.</span>' +
+        '</div>' +
+        st.questions.map(function (q, i2) {
+          var head = '<div style="font-size:13px;"><b>' + (i2 + 1) + ') ' + esc(q.text) + '</b></div>';
+          var inp = "";
+          if (q.qtype === "mcq") {
+            inp = (q.options || []).map(function (o, oi) {
+              return o ? '<label style="display:flex;gap:7px;align-items:center;font-size:12.5px;margin-top:6px;cursor:pointer;"><input type="radio" name="qq_' + q.id + '" value="' + oi + '" /><span>' + esc(o) + '</span></label>' : "";
+            }).join("");
+          } else if (q.qtype === "tf") {
+            inp = '<label style="display:flex;gap:7px;align-items:center;font-size:12.5px;margin-top:6px;cursor:pointer;"><input type="radio" name="qq_' + q.id + '" value="true" /><span>درست</span></label>' +
+                  '<label style="display:flex;gap:7px;align-items:center;font-size:12.5px;margin-top:6px;cursor:pointer;"><input type="radio" name="qq_' + q.id + '" value="false" /><span>نادرست</span></label>';
+          } else {
+            inp = '<textarea id="qt_' + q.id + '" class="input" rows="3" placeholder="پاسخ خود را بنویسید..." style="margin-top:6px;"></textarea>';
+          }
+          return '<div class="card">' + head + inp + '</div>';
+        }).join("") +
+        '<button class="btn btn-emerald" style="width:100%;margin-top:10px;" onclick="examSubmit()">📤 ثبت نهایی پاسخ‌ها</button>';
+      function tick() {
+        var el = document.getElementById("exam_clock");
+        if (!el) { if (window._examTimer) { clearInterval(window._examTimer); window._examTimer = null; } return; }
+        var ms = new Date(st.deadline).getTime() - Date.now();
+        if (ms <= 0) { el.textContent = "00:00"; clearInterval(window._examTimer); window._examTimer = null; examSubmit(true); return; }
+        var mm = Math.floor(ms / 60000), ss = Math.floor((ms % 60000) / 1000);
+        el.textContent = (mm < 10 ? "0" : "") + mm + ":" + (ss < 10 ? "0" : "") + ss;
+      }
+      tick();
+      window._examTimer = setInterval(tick, 1000);
+    }
+
+    async function examSubmit(auto) {
+      try {
+        var st = window._examState;
+        if (!st) return;
+        if (!auto && !confirm("پاسخ‌ها ثبت نهایی شود؟ بعد از ثبت قابل تغییر نیست.")) return;
+        var answers = {};
+        st.questions.forEach(function (q) {
+          if (q.qtype === "text") {
+            var el = document.getElementById("qt_" + q.id);
+            answers[String(q.id)] = el ? el.value : "";
+          } else {
+            var sel = null;
+            try { if (document.querySelector) sel = document.querySelector("input[name=" + String.fromCharCode(34) + "qq_" + q.id + String.fromCharCode(34) + "]:checked"); } catch (e1) {}
+            answers[String(q.id)] = sel ? sel.value : "";
+          }
+        });
+        if (window._examTimer) { clearInterval(window._examTimer); window._examTimer = null; }
+        await api("/api/ms/student/exams/submit", { examId: st.exam.id, answers: answers });
+        window._examDoneId = st.exam.id;
+        window._examState = null;
+        activeTab = "examresult";
+        renderApp();
+      } catch (e) { showToast("❌ " + e.message); }
+    }
+
+    async function renderExamResult(main) {
+      try {
+        var d = await api("/api/ms/student/exams/result?examId=" + Number(window._examDoneId || 0));
+        main.innerHTML =
+          '<div class="section-title">📄 نتیجه‌ی آزمون «' + esc(d.exam.title) + '»</div>' +
+          '<div class="card" style="text-align:center;">' +
+            '<div class="muted" style="font-size:12px;">نمره‌ی شما</div>' +
+            '<div style="font-size:34px;font-weight:bold;color:' + (d.score >= d.maxScore * 0.6 ? "#10b981" : d.score >= d.maxScore * 0.3 ? "#f59e0b" : "#ef4444") + ';">' + d.score + ' <span style="font-size:16px;opacity:.7;">از ' + d.maxScore + '</span></div>' +
+            (d.status === "submitted" ? '<div class="muted" style="font-size:11.5px;margin-top:6px;">✍️ سوال‌های تشریحی هنوز توسط معلم تصحیح نشده‌اند.</div>' : "") +
+            (d.late ? '<div class="muted" style="font-size:11.5px;margin-top:4px;">⏰ پاسخ شما با تاخیر ثبت شد.</div>' : "") +
+          '</div>' +
+          (d.questions || []).map(function (q, i2) {
+            var mark = q.qtype === "text"
+              ? (q.manualScore === null ? '✍️ <span class="muted">در انتظار تصحیح</span>' : '⭐ نمره: <b>' + q.manualScore + '</b>')
+              : (q.isCorrect ? "✅ درست" : "❌ نادرست");
+            var det = "";
+            if (q.qtype !== "text" && !q.isCorrect) {
+              det = '<div class="muted" style="font-size:11px;margin-top:3px;">پاسخ درست: ' + (q.qtype === "tf" ? (q.correct === "true" ? "درست" : "نادرست") : "گزینه‌ی " + (Number(q.correct) + 1) + (q.options && q.options[Number(q.correct)] ? " (" + esc(q.options[Number(q.correct)]) + ")" : "")) + '</div>';
+            }
+            return '<div class="card" style="padding:10px;">' +
+              '<div style="font-size:12.5px;"><b>' + (i2 + 1) + ') ' + esc(q.text) + '</b></div>' +
+              '<div style="margin-top:4px;font-size:12px;">' + mark + '</div>' + det +
+              (q.qtype === "text" && q.mine ? '<div class="muted" style="margin-top:4px;font-size:11px;">پاسخ شما: ' + esc(q.mine) + '</div>' : "") +
+            '</div>';
+          }).join("") +
+          backBtnHtml();
+      } catch (e) { main.innerHTML = '<div class="card">❌ ' + esc(e.message) + '</div>'; }
     }
 
     async function renderTeacherHw(main) {
@@ -3211,6 +3615,8 @@ const SCHOOL_JS = String.raw`
             '<div class="menu-grid">' +
               '<button class="menu-item" onclick="goTab(\'inbox\')"><span>📥</span>صندوق تایید</button>' +
               '<button class="menu-item" onclick="goTab(\'grades\')"><span>📝</span>ثبت نمره</button>' +
+                '<button class="menu-item" onclick="goTab(\'qbank\')"><span>🗄</span>بانک سوال</button>' +
+                '<button class="menu-item" onclick="goTab(\'exams\')"><span>📝</span>آزمون‌ها</button>' +
               '<button class="menu-item" onclick="goTab(\'hw\')"><span>📚</span>تکالیف</button>' +
               '<button class="menu-item" onclick="goTab(\'ai\')"><span>🤖</span>ابزار هوش مصنوعی</button>' +
               '<button class="menu-item" onclick="goTab(\'class\')"><span>🏆</span>کلاس و کدها</button>' +

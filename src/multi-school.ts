@@ -2873,17 +2873,17 @@ export async function handleMultiSchoolRequest(
       })),
     });
   }
-  if (path === "/api/ms/student/read/passage" && request.method === "GET" && (isStudent || isParent)) {
+  if (path === "/api/ms/student/read/passage" && request.method === "GET" && (isStudent || isParent || isTeacher || isAdmin)) {
     const pid = Number((new URL(request.url)).searchParams.get("id") || 0);
     const x: any = await db.prepare("SELECT id, title, author, translator, passage, added_by FROM ms_read_passages WHERE id = ? AND school_id = ?").bind(pid, schoolId).first();
     if (!x) return jsonOut({ error: "خلاصه یافت نشد." }, 404);
     return jsonOut({ passage: { id: Number(x.id), title: x.title, author: x.author, translator: x.translator || "", passage: x.passage, addedBy: x.added_by } });
   }
-  if (path === "/api/ms/student/read/start" && request.method === "POST" && isStudent) {
+  if (path === "/api/ms/student/read/start" && request.method === "POST" && (isStudent || isTeacher || isAdmin)) {
     const body = (await request.json().catch(() => ({}))) as any;
     const stId = Number(tok.studentId || 0);
     const st: any = await db.prepare("SELECT * FROM ms_students WHERE id = ? AND school_id = ?").bind(stId, schoolId).first();
-    if (!st) return jsonOut({ error: "دانش‌آموز یافت نشد." }, 404);
+    if (!st && isStudent) return jsonOut({ error: "دانش‌آموز یافت نشد." }, 404);
     const pid = Number(body.passageId || 0);
     const x: any = await db.prepare("SELECT * FROM ms_read_passages WHERE id = ? AND school_id = ?").bind(pid, schoolId).first();
     if (!x) return jsonOut({ error: "خلاصه یافت نشد." }, 404);
@@ -2915,11 +2915,11 @@ export async function handleMultiSchoolRequest(
     const total = questions.length;
     await db
       .prepare("INSERT INTO ms_read_quizzes (school_id, class_id, passage_id, student_id, questions, answers, chosen, score, total, created_at) VALUES (?, ?, ?, ?, ?, '[]', '[]', 0, ?, ?) ON CONFLICT(passage_id, student_id) DO UPDATE SET questions = excluded.questions, answers = excluded.answers, chosen = '[]', score = 0, total = excluded.total, created_at = excluded.created_at, finished_at = ''")
-      .bind(schoolId, Number(st.class_id || 0), pid, stId, JSON.stringify(questions), total, nowIso())
+      .bind(schoolId, st ? Number(st.class_id || 0) : 0, pid, stId, JSON.stringify(questions), total, nowIso())
       .run();
     return jsonOut({ ok: true, total, questions: questions.map((q) => ({ text: q.text, options: q.options })) });
   }
-  if (path === "/api/ms/student/read/submit" && request.method === "POST" && isStudent) {
+  if (path === "/api/ms/student/read/submit" && request.method === "POST" && (isStudent || isTeacher || isAdmin)) {
     const body = (await request.json().catch(() => ({}))) as any;
     const stId = Number(tok.studentId || 0);
     const pid = Number(body.passageId || 0);
@@ -2945,7 +2945,7 @@ export async function handleMultiSchoolRequest(
   }
   if (path === "/api/ms/teacher/read" && request.method === "GET" && (isTeacher || isAdmin)) {
     const ps = await db.prepare("SELECT id, title, author, translator, added_by, LENGTH(passage) plen FROM ms_read_passages WHERE school_id = ? ORDER BY id DESC LIMIT 30").bind(schoolId).all();
-    const qz = await db.prepare("SELECT q.passage_id, q.student_id, q.score, q.total, q.finished_at, s.name FROM ms_read_quizzes q LEFT JOIN ms_students s ON s.id = q.student_id WHERE q.school_id = ? AND q.finished_at != '' ORDER BY q.id DESC LIMIT 60").bind(schoolId).all();
+    const qz = await db.prepare("SELECT q.passage_id, q.student_id, q.score, q.total, q.finished_at, s.name FROM ms_read_quizzes q LEFT JOIN ms_students s ON s.id = q.student_id WHERE q.school_id = ? AND q.finished_at != '' AND q.student_id > 0 ORDER BY q.id DESC LIMIT 60").bind(schoolId).all();
     return jsonOut({
       passages: ((ps.results || []) as any[]).map((x) => ({ id: Number(x.id), title: x.title, author: x.author, translator: x.translator || "", addedBy: x.added_by, plen: Number(x.plen || 0) })),
       results: ((qz.results || []) as any[]).map((x) => ({ passageId: Number(x.passage_id), studentId: Number(x.student_id), studentName: x.name || "", score: Number(x.score || 0), total: Number(x.total || 0) })),

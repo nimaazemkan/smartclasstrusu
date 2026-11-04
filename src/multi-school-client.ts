@@ -2368,6 +2368,12 @@ const SCHOOL_JS = String.raw`
                 return '<tr><td>' + (medals[i2] || (i2 + 1)) + '</td><td>' + esc(b.name) + '</td><td style="text-align:center;">' + b.books + '</td><td style="text-align:center;">' + b.pages + '</td></tr>';
               }).join("") + '</tbody></table></div>'
             : "") +
+          '<div class="card" style="background:linear-gradient(135deg, rgba(245,158,11,0.12), rgba(16,185,129,0.08));border:1px solid rgba(245,158,11,0.35);">' +
+            '<div class="section-title">✨ کتاب پیشنهادی هوش مصنوعی</div>' +
+            '<div class="muted" style="font-size:11.5px;line-height:1.9;">هوش مصنوعی خودش یک کتاب مناسب انتخاب می‌کند و با نام کتاب، مؤلف و مترجم، خلاصه می‌نویسد. می‌توانید بخوانید، آزمونش را ببینید و به کلاس معرفی کنید.</div>' +
+            '<button class="btn btn-gold" style="margin-top:9px;width:100%;" onclick="readAiBook()">📚 یک کتاب به من معرفی کن</button>' +
+            '<div id="aiBookOut" style="margin-top:8px;"></div>' +
+          '</div>' +
           '<div class="section-title">📖 خلاصه‌های چالش خواندن (آزمون هوش مصنوعی)</div>' +
           '<div class="card">' +
             '<div class="section-title">➕ خلاصه‌ی جدید</div>' +

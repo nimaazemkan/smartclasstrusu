@@ -2274,11 +2274,18 @@ const SCHOOL_JS = String.raw`
                 return '<tr><td>' + (medals[i2] || (i2 + 1)) + '</td><td>' + esc(b.name) + '</td><td style="text-align:center;">' + b.books + '</td><td style="text-align:center;">' + b.pages + '</td><td style="text-align:center;">' + b.points + '</td></tr>';
               }).join("") + '</tbody></table></div>'
             : '<div class="card"><div class="muted">هنوز کسی در کلاس کتابی ثبت نکرده است.</div></div>') +
+          '<div class="card" style="background:linear-gradient(135deg, rgba(245,158,11,0.12), rgba(16,185,129,0.08));border:1px solid rgba(245,158,11,0.35);">' +
+            '<div class="section-title">✨ کتاب پیشنهادی هوش مصنوعی</div>' +
+            '<div class="muted" style="font-size:11.5px;line-height:1.9;">هوش مصنوعی خودش یک کتاب مناسب انتخاب می‌کند، خلاصه‌اش را می‌نویسد (با نام کتاب، مؤلف و مترجم) و تو آن را می‌خوانی و آزمون می‌دهی!</div>' +
+            '<button class="btn btn-gold" style="margin-top:9px;width:100%;" onclick="readAiBook()">📚 یک کتاب به من معرفی کن</button>' +
+            '<div id="aiBookOut" style="margin-top:8px;"></div>' +
+          '</div>' +
           '<div class="section-title">📖 خلاصه‌های خواندنی</div>' +
           ((rd.passages || []).length
             ? (rd.passages || []).map(function (x) {
                 return '<div class="card">' +
                   '<b>📖 ' + esc(x.title) + '</b>' + (x.author ? ' <span class="muted">— ' + esc(x.author) + '</span>' : "") +
+                  (x.translator ? '<div class="muted" style="font-size:11px;margin-top:2px;">🖊 ترجمه: ' + esc(x.translator) + '</div>' : "") +
                   '<div class="muted" style="font-size:11px;margin-top:4px;line-height:1.8;">' + esc(x.excerpt) + ' ...</div>' +
                   '<div style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap;">' +
                     (x.myQuiz && x.myQuiz.finished
@@ -2367,6 +2374,7 @@ const SCHOOL_JS = String.raw`
             '<div class="muted" style="font-size:11px;">این متن را دانش‌آموزان می‌خوانند و هوش مصنوعی از آن سوال چهارگزینه‌ای می‌سازد. (خلاصه‌ی کتاب‌های تاییدشده‌ی دانش‌آموزان هم خودکار به اینجا اضافه می‌شود)</div>' +
             '<input id="rq_title" class="input" placeholder="عنوان کتاب" style="margin-top:8px;" />' +
             '<input id="rq_author" class="input" placeholder="نویسنده" style="margin-top:6px;" />' +
+            '<input id="rq_translator" class="input" placeholder="مترجم (اختیاری)" style="margin-top:6px;" />' +
             '<textarea id="rq_text" class="input" rows="4" placeholder="متن خلاصه (حداقل ۶۰ حرف)" style="margin-top:6px;"></textarea>' +
             '<button class="btn btn-gold" style="margin-top:8px;" onclick="readPassageAdd()">📖 ثبت خلاصه</button>' +
           '</div>' +
@@ -2376,7 +2384,7 @@ const SCHOOL_JS = String.raw`
                 var avg = res.length ? (res.reduce(function (a2, b2) { return a2 + b2.score; }, 0) / res.length).toFixed(1) : "-";
                 return '<div class="card" style="padding:10px;display:flex;gap:8px;align-items:flex-start;">' +
                   '<div style="flex:1;"><b>📖 ' + esc(x.title) + '</b> <span class="muted">' + esc(x.author || "") + '</span>' +
-                  '<div class="muted" style="font-size:11px;margin-top:3px;">' + esc(x.addedBy || "") + ' • ' + (x.plen || 0) + ' حرف • ' + res.length + ' آزمون • میانگین ' + avg + '</div></div>' +
+                  '<div class="muted" style="font-size:11px;margin-top:3px;">' + (x.translator ? 'ترجمه: ' + esc(x.translator) + ' • ' : '') + esc(x.addedBy || "") + ' • ' + (x.plen || 0) + ' حرف • ' + res.length + ' آزمون • میانگین ' + avg + '</div></div>' +
                   '<button class="btn btn-ghost btn-sm" onclick="readPassageDelete(' + x.id + ')">🗑</button>' +
                 '</div>';
               }).join("")
@@ -2530,7 +2538,7 @@ const SCHOOL_JS = String.raw`
         main.innerHTML =
           '<div class="section-title">📖 ' + esc(sQ.passage.title) + '</div>' +
           '<div class="card">' +
-            '<div class="muted" style="font-size:11px;margin-bottom:7px;">' + esc(sQ.passage.author || "") + ' — ارسال‌کننده: ' + esc(sQ.passage.addedBy || "") + '</div>' +
+            '<div class="muted" style="font-size:11px;margin-bottom:7px;">' + esc(sQ.passage.author || "") + (sQ.passage.translator ? ' — ترجمه: ' + esc(sQ.passage.translator) : '') + ' — ارسال‌کننده: ' + esc(sQ.passage.addedBy || "") + '</div>' +
             '<div style="font-size:13px;line-height:2.1;background:rgba(148,163,184,0.08);padding:11px;border-radius:10px;max-height:240px;overflow:auto;">' + esc(sQ.passage.passage) + '</div>' +
           '</div>' +
           '<div class="section-title">📝 سوال‌ها (' + sQ.total + ')</div>' +
@@ -2589,6 +2597,7 @@ const SCHOOL_JS = String.raw`
         await api("/api/ms/teacher/read/add", {
           title: document.getElementById("rq_title").value.trim(),
           author: document.getElementById("rq_author").value.trim(),
+          translator: (document.getElementById("rq_translator") || {}).value ? document.getElementById("rq_translator").value.trim() : "",
           passage: document.getElementById("rq_text").value.trim()
         });
         showToast("📖 خلاصه ثبت شد و به دانش‌آموزان اطلاع داده شد");
@@ -2599,6 +2608,28 @@ const SCHOOL_JS = String.raw`
     async function readPassageDelete(id) {
       if (!confirm("این خلاصه و آزمون‌هایش حذف شود؟")) return;
       try { await api("/api/ms/teacher/read/delete", { id: id }); showToast("🗑 حذف شد"); renderApp(); } catch (e) { showToast("❌ " + e.message); }
+    }
+
+    async function readAiBook() {
+      var out = document.getElementById("aiBookOut");
+      if (out) out.innerHTML = '<div class="muted" style="text-align:center;padding:12px;">⏳ هوش مصنوعی در حال انتخاب یک کتاب و نوشتن خلاصه...</div>';
+      try {
+        var r = await api("/api/ms/student/read/ai-book", {});
+        var b = r.book || {};
+        if (out) {
+          out.innerHTML =
+            '<div style="background:rgba(2,6,23,0.25);border:1px solid rgba(245,158,11,0.3);border-radius:12px;padding:11px;">' +
+              '<div style="font-size:15px;font-weight:900;">📕 ' + esc(b.title || "") + '</div>' +
+              '<div class="muted" style="font-size:11.5px;margin-top:3px;">✍️ مؤلف: ' + esc(b.author || "") + (b.translator ? ' &nbsp;|&nbsp; 🖊 ترجمه: ' + esc(b.translator) : "") + '</div>' +
+              '<div style="font-size:12.5px;line-height:2;margin-top:8px;max-height:260px;overflow:auto;background:rgba(148,163,184,0.08);padding:10px;border-radius:9px;">' + esc(b.passage || "") + '</div>' +
+              '<div class="muted" style="font-size:10px;margin-top:6px;">✨ معرفی و خلاصه توسط هوش مصنوعی ساخته شده است' + (r.isNew ? " — به فهرست کلاس هم اضافه شد" : "") + '</div>' +
+              '<button class="btn btn-emerald" style="width:100%;margin-top:9px;" onclick="readQuizStart(' + b.id + ')">📝 آزمون خواندن این کتاب</button>' +
+              '<button class="btn btn-ghost btn-sm" style="width:100%;margin-top:6px;" onclick="readAiBook()">📚 کتاب بعدی را معرفی کن</button>' +
+            '</div>';
+        }
+      } catch (e) {
+        if (out) out.innerHTML = '<div class="muted" style="text-align:center;padding:10px;">❌ ' + esc(e.message) + '</div>';
+      }
     }
 
     async function renderTeacherHw(main) {

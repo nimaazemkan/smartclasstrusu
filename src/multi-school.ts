@@ -283,6 +283,7 @@ export async function ensureSchoolTables(db: D1Database): Promise<void> {
   await db.prepare("CREATE TABLE IF NOT EXISTS ms_read_passages (id INTEGER PRIMARY KEY AUTOINCREMENT, school_id INTEGER, class_id INTEGER DEFAULT 0, title TEXT DEFAULT '', author TEXT DEFAULT '', passage TEXT DEFAULT '', added_by TEXT DEFAULT '', created_at TEXT DEFAULT '')").run();
   await db.prepare("CREATE TABLE IF NOT EXISTS ms_read_quizzes (id INTEGER PRIMARY KEY AUTOINCREMENT, school_id INTEGER, class_id INTEGER DEFAULT 0, passage_id INTEGER, student_id INTEGER, questions TEXT DEFAULT '', answers TEXT DEFAULT '', chosen TEXT DEFAULT '', score REAL DEFAULT 0, total INTEGER DEFAULT 0, created_at TEXT DEFAULT '', finished_at TEXT DEFAULT '')").run();
   await db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS ux_ms_read_quiz ON ms_read_quizzes (passage_id, student_id)").run();
+  try { await db.prepare("ALTER TABLE ms_read_passages ADD COLUMN translator TEXT DEFAULT ''").run(); } catch (e) {}
   await db
     .prepare(`CREATE TABLE IF NOT EXISTS ms_tg_msgmap (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -2840,7 +2841,7 @@ export async function handleMultiSchoolRequest(
     const stId = Number(tok.studentId || 0);
     const st: any = await db.prepare("SELECT * FROM ms_students WHERE id = ? AND school_id = ?").bind(stId, schoolId).first();
     if (!st) return jsonOut({ error: "دانش‌آموز یافت نشد." }, 404);
-    const ps = await db.prepare("SELECT id, title, author, passage, added_by FROM ms_read_passages WHERE school_id = ? ORDER BY id DESC LIMIT 30").bind(schoolId).all();
+    const ps = await db.prepare("SELECT id, title, author, translator, passage, added_by FROM ms_read_passages WHERE school_id = ? ORDER BY id DESC LIMIT 30").bind(schoolId).all();
     const qs = await db.prepare("SELECT passage_id, score, total, finished_at FROM ms_read_quizzes WHERE school_id = ? AND student_id = ?").bind(schoolId, stId).all();
     const doneMap = new Map<number, any>();
     for (const q of ((qs.results || []) as any[])) {
@@ -2848,7 +2849,7 @@ export async function handleMultiSchoolRequest(
     }
     return jsonOut({
       passages: ((ps.results || []) as any[]).map((x) => ({
-        id: Number(x.id), title: x.title, author: x.author, addedBy: x.added_by,
+        id: Number(x.id), title: x.title, author: x.author, translator: x.translator || "", addedBy: x.added_by,
         excerpt: String(x.passage || "").slice(0, 220),
         myQuiz: doneMap.get(Number(x.id)) || null,
       })),
@@ -2856,9 +2857,9 @@ export async function handleMultiSchoolRequest(
   }
   if (path === "/api/ms/student/read/passage" && request.method === "GET" && (isStudent || isParent)) {
     const pid = Number((new URL(request.url)).searchParams.get("id") || 0);
-    const x: any = await db.prepare("SELECT id, title, author, passage, added_by FROM ms_read_passages WHERE id = ? AND school_id = ?").bind(pid, schoolId).first();
+    const x: any = await db.prepare("SELECT id, title, author, translator, passage, added_by FROM ms_read_passages WHERE id = ? AND school_id = ?").bind(pid, schoolId).first();
     if (!x) return jsonOut({ error: "خلاصه یافت نشد." }, 404);
-    return jsonOut({ passage: { id: Number(x.id), title: x.title, author: x.author, passage: x.passage, addedBy: x.added_by } });
+    return jsonOut({ passage: { id: Number(x.id), title: x.title, author: x.author, translator: x.translator || "", passage: x.passage, addedBy: x.added_by } });
   }
   if (path === "/api/ms/student/read/start" && request.method === "POST" && isStudent) {
     const body = (await request.json().catch(() => ({}))) as any;
@@ -2926,10 +2927,10 @@ export async function handleMultiSchoolRequest(
     return jsonOut({ ok: true, score, total, review });
   }
   if (path === "/api/ms/teacher/read" && request.method === "GET" && (isTeacher || isAdmin)) {
-    const ps = await db.prepare("SELECT id, title, author, added_by, LENGTH(passage) plen FROM ms_read_passages WHERE school_id = ? ORDER BY id DESC LIMIT 30").bind(schoolId).all();
+    const ps = await db.prepare("SELECT id, title, author, translator, added_by, LENGTH(passage) plen FROM ms_read_passages WHERE school_id = ? ORDER BY id DESC LIMIT 30").bind(schoolId).all();
     const qz = await db.prepare("SELECT q.passage_id, q.student_id, q.score, q.total, q.finished_at, s.name FROM ms_read_quizzes q LEFT JOIN ms_students s ON s.id = q.student_id WHERE q.school_id = ? AND q.finished_at != '' ORDER BY q.id DESC LIMIT 60").bind(schoolId).all();
     return jsonOut({
-      passages: ((ps.results || []) as any[]).map((x) => ({ id: Number(x.id), title: x.title, author: x.author, addedBy: x.added_by, plen: Number(x.plen || 0) })),
+      passages: ((ps.results || []) as any[]).map((x) => ({ id: Number(x.id), title: x.title, author: x.author, translator: x.translator || "", addedBy: x.added_by, plen: Number(x.plen || 0) })),
       results: ((qz.results || []) as any[]).map((x) => ({ passageId: Number(x.passage_id), studentId: Number(x.student_id), studentName: x.name || "", score: Number(x.score || 0), total: Number(x.total || 0) })),
     });
   }
@@ -2940,8 +2941,8 @@ export async function handleMultiSchoolRequest(
     if (title.length < 2) return jsonOut({ error: "عنوان کوتاه است." }, 400);
     if (passage.length < 60) return jsonOut({ error: "متن خلاصه باید حداقل ۶۰ حرف باشد." }, 400);
     const r = await db
-      .prepare("INSERT INTO ms_read_passages (school_id, class_id, title, author, passage, added_by, created_at) VALUES (?, 0, ?, ?, ?, ?, ?)")
-      .bind(schoolId, title, String(body.author || "").trim(), passage.slice(0, 3000), String(tok.name || "معلم"), nowIso())
+      .prepare("INSERT INTO ms_read_passages (school_id, class_id, title, author, translator, passage, added_by, created_at) VALUES (?, 0, ?, ?, ?, ?, ?, ?)")
+      .bind(schoolId, title, String(body.author || "").trim(), String(body.translator || "").trim(), passage.slice(0, 3000), String(tok.name || "معلم"), nowIso())
       .run();
     await msTgBroadcast(db, deps, schoolId, "📖 خلاصه‌ی کتاب جدید در چالش کتاب‌خوانی: «" + title + "»" + String.fromCharCode(10) + "بخوانید و در آزمون خواندن شرکت کنید! 📝");
     return jsonOut({ ok: true, id: Number((r as any)?.meta?.last_row_id || 0) });
@@ -2952,6 +2953,48 @@ export async function handleMultiSchoolRequest(
     await db.prepare("DELETE FROM ms_read_quizzes WHERE passage_id = ? AND school_id = ?").bind(pid, schoolId).run();
     await db.prepare("DELETE FROM ms_read_passages WHERE id = ? AND school_id = ?").bind(pid, schoolId).run();
     return jsonOut({ ok: true });
+  }
+
+  // ==================== ✨ کتاب پیشنهادی هوش مصنوعی ====================
+  if (path === "/api/ms/student/read/ai-book" && request.method === "POST" && (isStudent || isTeacher || isAdmin)) {
+    const sysP = "تو کارشناس کتاب‌خوانی مدارس ایران هستی. فقط JSON خروجی بده، بدون هیچ متن اضافه.";
+    const userP = "یک کتاب واقعی و مناسب دانش‌آموزان دبستان ایران (پایه 4 تا 6) انتخاب کن و معرفی کن. شرایط: نام دقیق و واقعی کتاب، نویسنده‌ی واقعی، و اگر اثر ترجمه است نام مترجم شناخته‌شده‌ی فارسی را بنویس (اگر اثر ایرانی است مترجم را - بگذار). سپس خلاصه‌ای جذاب و روان بین 600 تا 1100 حرف بنویس که دانش‌آموز با خواندنش فضای داستان و پیام کتاب را بفهمد؛ آخر داستان را لو نده. خروجی فقط JSON با این ساختار: {\"title\":\"...\",\"author\":\"...\",\"translator\":\"...\",\"summary\":\"...\"}";
+    let raw = "";
+    try {
+      if (typeof (deps as any).aiChat !== "function") return jsonOut({ error: "سرویس هوش مصنوعی در دسترس نیست." }, 503);
+      raw = String((await (deps as any).aiChat("auto", sysP, userP, "")) || "");
+    } catch (eA) {
+      return jsonOut({ error: "خطا در ارتباط با هوش مصنوعی: " + String((eA as any)?.message || eA).slice(0, 120) }, 502);
+    }
+    let book: any = null;
+    try {
+      const i1 = raw.indexOf("{");
+      const i2 = raw.lastIndexOf("}");
+      book = JSON.parse(i1 >= 0 && i2 > i1 ? raw.slice(i1, i2 + 1) : raw);
+    } catch (eP) {
+      return jsonOut({ error: "پاسخ هوش مصنوعی قابل تفسیر نبود؛ دوباره تلاش کنید." }, 502);
+    }
+    const title = String(book?.title || "").trim();
+    const author = String(book?.author || "").trim();
+    const translator = String(book?.translator || "").trim().replace(/^-$/, "");
+    const summary = String(book?.summary || "").trim();
+    if (title.length < 2 || author.length < 2 || summary.length < 200) {
+      return jsonOut({ error: "هوش مصنوعی معرفی کاملی برنگرداند؛ دوباره تلاش کنید." }, 502);
+    }
+    const dup: any = await db
+      .prepare("SELECT id, passage FROM ms_read_passages WHERE school_id = ? AND title = ? AND added_by = '🤖 هوش مصنوعی'")
+      .bind(schoolId, title)
+      .first();
+    let pid = Number(dup?.id || 0);
+    if (pid) {
+      return jsonOut({ ok: true, id: pid, isNew: false, book: { id: pid, title, author, translator, passage: String(dup?.passage || summary), addedBy: "🤖 هوش مصنوعی" } });
+    }
+    const r = await db
+      .prepare("INSERT INTO ms_read_passages (school_id, class_id, title, author, translator, passage, added_by, created_at) VALUES (?, 0, ?, ?, ?, ?, '🤖 هوش مصنوعی', ?)")
+      .bind(schoolId, title, author, translator, summary.slice(0, 3000), nowIso())
+      .run();
+    pid = Number((r as any)?.meta?.last_row_id || 0);
+    return jsonOut({ ok: true, id: pid, isNew: true, book: { id: pid, title, author, translator, passage: summary, addedBy: "🤖 هوش مصنوعی" } });
   }
 
   // ==================== پنل مدیر مدرسه ====================

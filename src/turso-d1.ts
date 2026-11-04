@@ -237,6 +237,7 @@ export function createTursoD1Adapter(client: Client): D1Database {
   };
 }
 
+let cachedAdapter: D1Database | null = null;
 export function getTursoD1FromEnv(envObj: Record<string, string | undefined> = process.env): D1Database | null {
   const cfg = resolveTursoConfig(envObj);
   if (!cfg) return null;
@@ -247,6 +248,8 @@ export function getTursoD1FromEnv(envObj: Record<string, string | undefined> = p
     });
     cachedUrl = cfg.url;
     coreTablesBootstrapped = false;
+    cachedAdapter = null;
   }
-  return createTursoD1Adapter(cachedClient);
+  if (!cachedAdapter) cachedAdapter = createTursoD1Adapter(cachedClient);
+  return cachedAdapter;
 }

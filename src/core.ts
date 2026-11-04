@@ -5003,14 +5003,25 @@ export async function aiChatComplete(env: Env, provider: string, system: string,
   if (prov === "gemini") {
     const k = String(key || (env as any).GEMINI_API_KEY || "");
     if (!k) throw new Error("کلید Gemini تنظیم نشده است");
-    const response = await fetch("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=" + k, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ contents: [{ parts: [{ text: system + NL + NL + user }] }] }),
-    });
-    if (!response.ok) throw new Error("خطای Gemini (" + response.status + ")");
-    const data = (await response.json()) as any;
-    return String(data?.candidates?.[0]?.content?.parts?.[0]?.text || "");
+    const geminiModels = ["gemini-3.8-flash", "gemini-flash-latest", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-2.5-flash-lite"];
+    let lastErr = "";
+    for (const model of geminiModels) {
+      try {
+        const response = await fetch("https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent?key=" + k, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ contents: [{ parts: [{ text: system + NL + NL + user }] }] }),
+        });
+        if (!response.ok) { lastErr = "خطای Gemini/" + model + " (" + response.status + ")"; continue; }
+        const data = (await response.json()) as any;
+        const txt = String(data?.candidates?.[0]?.content?.parts?.[0]?.text || "");
+        if (txt) return txt;
+        lastErr = "پاسخ خالی از " + model;
+      } catch (eG) {
+        lastErr = String((eG as any)?.message || eG).slice(0, 100);
+      }
+    }
+    throw new Error(lastErr || "هیچ مدل Gemini پاسخ نداد");
   }
   if (prov === "openrouter") {
     const k = String(key || (env as any).OPENROUTER_API_KEY || "");

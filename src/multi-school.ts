@@ -2790,7 +2790,7 @@ export async function handleMultiSchoolRequest(
     }
     const kindFa = kinds.includes("mcq") && kinds.includes("tf") ? "ترکیبی از چهارگزینه‌ای و درست/نادرست" : kinds.includes("tf") ? "درست/نادرست" : "چهارگزینه‌ای";
     const sysP = "تو یک طراح سوال دقیق برای مدرسه‌ی ابتدایی ایران هستی. فقط و فقط JSON خروجی بده، بدون هیچ متن اضافه.";
-    const userP = "برای " + (grade ? "پایه‌ی " + grade + " " : "") + "درس " + (subject || "عمومی") + "، درباره‌ی «" + (topic || subject) + "» دقیقاً " + count + " سوال " + kindFa + " طرح کن. خروجی فقط JSON با این ساختار: {\"questions\":[{\"qtype\":\"mcq\",\"text\":\"...\",\"options\":[...4...],\"answer\":1},{...tf...}]}. برای mcq فیلد answer ایندکس عددی گزینه‌ی درست (0 تا 3) و برای tf مقدار true یا false. متن سوال‌ها فارسی روان و کاملاً مرتبط با موضوع باشد؛ هیچ سوال حاشیه‌ای نساز.";
+    const userP = "برای " + (grade ? "پایه‌ی " + grade + " " : "") + "درس " + (subject || "عمومی") + "، درباره‌ی «" + (topic || subject) + "» دقیقاً " + count + " سوال " + kindFa + " طرح کن. خروجی فقط JSON با این ساختار: {\"questions\":[{\"qtype\":\"mcq\",\"text\":\"...\",\"options\":[...4...],\"answer\":1},{...tf...}]}. برای mcq فیلد answer ایندکس عددی گزینه‌ی درست (0 تا 3) و برای tf مقدار true یا false. متن سوال‌ها فارسی روان و کاملاً مرتبط با موضوع باشد؛ هیچ سوال حاشیه‌ای نساز. از نمادهای LaTeX و علامت دلار استفاده نکن؛ کسرها را ساده بنویس (مثلاً 2/3).";
     let raw = "";
     try {
       if (typeof (deps as any).aiChat === "function") {

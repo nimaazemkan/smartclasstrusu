@@ -2241,6 +2241,7 @@ const SCHOOL_JS = String.raw`
     async function renderStudentBooks(main) {
       try {
         var d = await api("/api/ms/student/books");
+        var rd = await api("/api/ms/student/read").catch(function () { return { passages: [] }; });
         main.innerHTML =
           '<div class="section-title">📚 چالش کتاب‌خوانی</div>' +
           '<div class="card">' +
@@ -2273,6 +2274,22 @@ const SCHOOL_JS = String.raw`
                 return '<tr><td>' + (medals[i2] || (i2 + 1)) + '</td><td>' + esc(b.name) + '</td><td style="text-align:center;">' + b.books + '</td><td style="text-align:center;">' + b.pages + '</td><td style="text-align:center;">' + b.points + '</td></tr>';
               }).join("") + '</tbody></table></div>'
             : '<div class="card"><div class="muted">هنوز کسی در کلاس کتابی ثبت نکرده است.</div></div>') +
+          '<div class="section-title">📖 خلاصه‌های خواندنی</div>' +
+          ((rd.passages || []).length
+            ? (rd.passages || []).map(function (x) {
+                return '<div class="card">' +
+                  '<b>📖 ' + esc(x.title) + '</b>' + (x.author ? ' <span class="muted">— ' + esc(x.author) + '</span>' : "") +
+                  '<div class="muted" style="font-size:11px;margin-top:4px;line-height:1.8;">' + esc(x.excerpt) + ' ...</div>' +
+                  '<div style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap;">' +
+                    (x.myQuiz && x.myQuiz.finished
+                      ? '<span style="background:rgba(16,185,129,0.16);color:#6EE7B7;padding:3px 10px;border-radius:999px;font-size:11px;font-weight:800;">✅ ' + x.myQuiz.score + ' از ' + x.myQuiz.total + '</span>'
+                      : "") +
+                    '<button class="btn btn-gold btn-sm" onclick="readQuizStart(' + x.id + ')">' + (x.myQuiz && x.myQuiz.finished ? "📝 آزمون دوباره" : "📝 آزمون خواندن") + '</button>' +
+                  '</div>' +
+                  '<div class="muted" style="font-size:10.5px;margin-top:5px;">ارسال‌کننده: ' + esc(x.addedBy || "معلم") + '</div>' +
+                '</div>';
+              }).join("")
+            : '<div class="card"><div class="muted">هنوز خلاصه‌ای ثبت نشده — به‌زودی معلم یا دوستانت خلاصه‌ی کتاب می‌گذارند.</div></div>') +
           ((d.shelf || []).length
             ? '<div class="section-title">📚 قفسه‌ی معلم‌ها</div>' + (d.shelf || []).map(function (b) {
                 return '<div class="card" style="padding:9px;"><b>' + esc(b.title) + '</b> <span class="muted">— ' + esc(b.author || "") + '</span><div class="muted" style="font-size:11px;">👨‍🏫 ' + esc(b.name) + (b.pages ? " • " + b.pages + " صفحه" : "") + '</div></div>';
@@ -2299,6 +2316,7 @@ const SCHOOL_JS = String.raw`
     async function renderTeacherBooks(main) {
       try {
         var d = await api("/api/ms/teacher/books");
+        var rd = await api("/api/ms/teacher/read").catch(function () { return { passages: [], results: [] }; });
         main.innerHTML =
           '<div class="section-title">📚 چالش کتاب‌خوانی</div>' +
           ((d.pending || []).length
@@ -2341,6 +2359,33 @@ const SCHOOL_JS = String.raw`
               (d.board || []).map(function (b, i2) {
                 var medals = ["🥇", "🥈", "🥉"];
                 return '<tr><td>' + (medals[i2] || (i2 + 1)) + '</td><td>' + esc(b.name) + '</td><td style="text-align:center;">' + b.books + '</td><td style="text-align:center;">' + b.pages + '</td></tr>';
+              }).join("") + '</tbody></table></div>'
+            : "") +
+          '<div class="section-title">📖 خلاصه‌های چالش خواندن (آزمون هوش مصنوعی)</div>' +
+          '<div class="card">' +
+            '<div class="section-title">➕ خلاصه‌ی جدید</div>' +
+            '<div class="muted" style="font-size:11px;">این متن را دانش‌آموزان می‌خوانند و هوش مصنوعی از آن سوال چهارگزینه‌ای می‌سازد. (خلاصه‌ی کتاب‌های تاییدشده‌ی دانش‌آموزان هم خودکار به اینجا اضافه می‌شود)</div>' +
+            '<input id="rq_title" class="input" placeholder="عنوان کتاب" style="margin-top:8px;" />' +
+            '<input id="rq_author" class="input" placeholder="نویسنده" style="margin-top:6px;" />' +
+            '<textarea id="rq_text" class="input" rows="4" placeholder="متن خلاصه (حداقل ۶۰ حرف)" style="margin-top:6px;"></textarea>' +
+            '<button class="btn btn-gold" style="margin-top:8px;" onclick="readPassageAdd()">📖 ثبت خلاصه</button>' +
+          '</div>' +
+          ((rd.passages || []).length
+            ? (rd.passages || []).map(function (x) {
+                var res = (rd.results || []).filter(function (q) { return q.passageId === x.id; });
+                var avg = res.length ? (res.reduce(function (a2, b2) { return a2 + b2.score; }, 0) / res.length).toFixed(1) : "-";
+                return '<div class="card" style="padding:10px;display:flex;gap:8px;align-items:flex-start;">' +
+                  '<div style="flex:1;"><b>📖 ' + esc(x.title) + '</b> <span class="muted">' + esc(x.author || "") + '</span>' +
+                  '<div class="muted" style="font-size:11px;margin-top:3px;">' + esc(x.addedBy || "") + ' • ' + (x.plen || 0) + ' حرف • ' + res.length + ' آزمون • میانگین ' + avg + '</div></div>' +
+                  '<button class="btn btn-ghost btn-sm" onclick="readPassageDelete(' + x.id + ')">🗑</button>' +
+                '</div>';
+              }).join("")
+            : "") +
+          ((rd.results || []).length
+            ? '<div class="section-title">📊 آخرین نتایج آزمون خواندن</div><div class="card"><table style="width:100%;font-size:12px;"><thead><tr><th style="text-align:right;">دانش‌آموز</th><th style="text-align:right;">خلاصه</th><th>نمره</th></tr></thead><tbody>' +
+              (rd.results || []).slice(0, 12).map(function (q) {
+                var pz = (rd.passages || []).find(function (x) { return x.id === q.passageId; });
+                return '<tr><td>' + esc(q.studentName) + '</td><td>' + esc(pz ? pz.title : "") + '</td><td style="text-align:center;">' + q.score + '/' + q.total + '</td></tr>';
               }).join("") + '</tbody></table></div>'
             : "") +
           backBtnHtml();
@@ -2464,6 +2509,96 @@ const SCHOOL_JS = String.raw`
         await api("/api/ms/super/ai-keys", { provider: prov, key: (el || {}).value || "" });
         showToast("✅ کلید ذخیره شد — معلمان اکنون می‌توانند این سرویس را انتخاب کنند");
       } catch (e) { showToast("❌ " + e.message); }
+    }
+
+    // ==================== 📝 آزمون خواندن (خلاصه + سوال AI) ====================
+    var _readQuizState = null;
+
+    function readBackBtn() {
+      return '<button class="btn btn-ghost" style="width:100%;margin-top:10px;" onclick="goTab(' + Q + 'books' + Q + ')">↩️ بازگشت به کتاب‌خوانی</button>';
+    }
+
+    async function readQuizStart(pid) {
+      var main = document.getElementById("mainView");
+      if (!main) return;
+      main.innerHTML = '<div class="card" style="text-align:center;padding:30px;">⏳ هوش مصنوعی در حال طراحی سوال از متن خلاصه...</div>';
+      try {
+        var pp = await api("/api/ms/student/read/passage?id=" + pid);
+        var z = await api("/api/ms/student/read/start", { passageId: pid });
+        _readQuizState = { passageId: pid, passage: pp.passage, questions: z.questions || [], total: z.total };
+        var sQ = _readQuizState;
+        main.innerHTML =
+          '<div class="section-title">📖 ' + esc(sQ.passage.title) + '</div>' +
+          '<div class="card">' +
+            '<div class="muted" style="font-size:11px;margin-bottom:7px;">' + esc(sQ.passage.author || "") + ' — ارسال‌کننده: ' + esc(sQ.passage.addedBy || "") + '</div>' +
+            '<div style="font-size:13px;line-height:2.1;background:rgba(148,163,184,0.08);padding:11px;border-radius:10px;max-height:240px;overflow:auto;">' + esc(sQ.passage.passage) + '</div>' +
+          '</div>' +
+          '<div class="section-title">📝 سوال‌ها (' + sQ.total + ')</div>' +
+          sQ.questions.map(function (q, i2) {
+            return '<div class="card">' +
+              '<b style="font-size:13px;">' + (i2 + 1) + ') ' + esc(q.text) + '</b>' +
+              '<div style="margin-top:8px;display:flex;flex-direction:column;gap:6px;">' +
+                q.options.map(function (o, oi) {
+                  return '<label style="display:flex;gap:8px;align-items:center;font-size:12.5px;cursor:pointer;background:rgba(148,163,184,0.08);padding:8px 10px;border-radius:9px;"><input type="radio" name="rq_' + i2 + '" value="' + oi + '" />' + esc(o) + '</label>';
+                }).join("") +
+              '</div>' +
+            '</div>';
+          }).join("") +
+          '<button class="btn btn-emerald" style="width:100%;" onclick="readQuizSubmit()">📤 ثبت پاسخ‌ها</button>' +
+          readBackBtn();
+      } catch (e) {
+        main.innerHTML = '<div class="card">❌ ' + esc(e.message) + '</div>' + readBackBtn();
+      }
+    }
+
+    async function readQuizSubmit() {
+      try {
+        var sQ = _readQuizState;
+        if (!sQ) return;
+        var answers = [];
+        for (var i2 = 0; i2 < sQ.questions.length; i2++) {
+          var sel = null;
+          try { sel = document.querySelector('input[name="rq_' + i2 + '"]:checked'); } catch (e) {}
+          answers.push(sel ? Number(sel.value) : -1);
+        }
+        if (answers.indexOf(-1) >= 0 && !confirm("به همه‌ی سوال‌ها پاسخ نداده‌ای؛ با این حال ثبت شود؟")) return;
+        var r = await api("/api/ms/student/read/submit", { passageId: sQ.passageId, answers: answers });
+        var main = document.getElementById("mainView");
+        if (!main) return;
+        var pct = r.total ? Math.round((r.score / r.total) * 100) : 0;
+        main.innerHTML =
+          '<div class="card" style="text-align:center;padding:24px;">' +
+            '<div style="font-size:46px;">' + (pct >= 75 ? "🏆" : pct >= 50 ? "👏" : "📚") + '</div>' +
+            '<div class="stat-num" style="font-size:36px;margin-top:6px;">' + r.score + ' <span style="font-size:17px;color:var(--text-muted);">از ' + r.total + '</span></div>' +
+            '<div class="muted">امتیاز خواندن شما</div>' +
+          '</div>' +
+          '<div class="section-title">📝 بررسی پاسخ‌ها</div>' +
+          (r.review || []).map(function (q, i2) {
+            return '<div class="card" style="border-right:4px solid ' + (q.isCorrect ? "#10B981" : "#EF4444") + ';">' +
+              '<b style="font-size:12.5px;">' + (i2 + 1) + ') ' + esc(q.text) + '</b>' +
+              '<div style="font-size:11.5px;margin-top:5px;">پاسخ شما: ' + (q.chosen >= 0 ? esc(q.options[q.chosen] || "") : "بدون پاسخ") + (q.isCorrect ? " ✅" : " ❌") + '</div>' +
+              (q.isCorrect ? "" : '<div style="font-size:11.5px;margin-top:3px;color:#6EE7B7;">پاسخ درست: ' + esc(q.options[q.answer] || "") + '</div>') +
+            '</div>';
+          }).join("") +
+          readBackBtn();
+      } catch (e) { showToast("❌ " + e.message); }
+    }
+
+    async function readPassageAdd() {
+      try {
+        await api("/api/ms/teacher/read/add", {
+          title: document.getElementById("rq_title").value.trim(),
+          author: document.getElementById("rq_author").value.trim(),
+          passage: document.getElementById("rq_text").value.trim()
+        });
+        showToast("📖 خلاصه ثبت شد و به دانش‌آموزان اطلاع داده شد");
+        renderApp();
+      } catch (e) { showToast("❌ " + e.message); }
+    }
+
+    async function readPassageDelete(id) {
+      if (!confirm("این خلاصه و آزمون‌هایش حذف شود؟")) return;
+      try { await api("/api/ms/teacher/read/delete", { id: id }); showToast("🗑 حذف شد"); renderApp(); } catch (e) { showToast("❌ " + e.message); }
     }
 
     async function renderTeacherHw(main) {

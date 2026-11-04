@@ -280,6 +280,9 @@ export async function ensureSchoolTables(db: D1Database): Promise<void> {
   await db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS ux_ms_exam_attempt ON ms_exam_attempts (exam_id, student_id)").run();
   await db.prepare("CREATE TABLE IF NOT EXISTS ms_books (id INTEGER PRIMARY KEY AUTOINCREMENT, school_id INTEGER, class_id INTEGER DEFAULT 0, user_role TEXT DEFAULT 'student', user_id INTEGER DEFAULT 0, user_name TEXT DEFAULT '', title TEXT DEFAULT '', author TEXT DEFAULT '', pages INTEGER DEFAULT 0, minutes INTEGER DEFAULT 0, summary TEXT DEFAULT '', status TEXT DEFAULT 'pending', points REAL DEFAULT 0, feedback TEXT DEFAULT '', created_at TEXT DEFAULT '')").run();
   await db.prepare("CREATE TABLE IF NOT EXISTS ms_ai_keys (provider TEXT PRIMARY KEY, api_key TEXT DEFAULT '', updated_at TEXT DEFAULT '')").run();
+  await db.prepare("CREATE TABLE IF NOT EXISTS ms_read_passages (id INTEGER PRIMARY KEY AUTOINCREMENT, school_id INTEGER, class_id INTEGER DEFAULT 0, title TEXT DEFAULT '', author TEXT DEFAULT '', passage TEXT DEFAULT '', added_by TEXT DEFAULT '', created_at TEXT DEFAULT '')").run();
+  await db.prepare("CREATE TABLE IF NOT EXISTS ms_read_quizzes (id INTEGER PRIMARY KEY AUTOINCREMENT, school_id INTEGER, class_id INTEGER DEFAULT 0, passage_id INTEGER, student_id INTEGER, questions TEXT DEFAULT '', answers TEXT DEFAULT '', chosen TEXT DEFAULT '', score REAL DEFAULT 0, total INTEGER DEFAULT 0, created_at TEXT DEFAULT '', finished_at TEXT DEFAULT '')").run();
+  await db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS ux_ms_read_quiz ON ms_read_quizzes (passage_id, student_id)").run();
   await db
     .prepare(`CREATE TABLE IF NOT EXISTS ms_tg_msgmap (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -2729,6 +2732,12 @@ export async function handleMultiSchoolRequest(
     const pts = Math.max(0, msNum(body.points) || 0);
     const fb = String(body.feedback || "").trim();
     await db.prepare("UPDATE ms_books SET status = ?, points = ?, feedback = ? WHERE id = ?").bind(approve ? "approved" : "rejected", approve ? pts : 0, fb, Number(b.id)).run();
+    if (approve && String(b.summary || "").trim().length > 40) {
+      await db
+        .prepare("INSERT INTO ms_read_passages (school_id, class_id, title, author, passage, added_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+        .bind(schoolId, Number(b.class_id || 0), String(b.title || ""), String(b.author || ""), String(b.summary || "").trim().slice(0, 3000), String(b.user_name || ""), nowIso())
+        .run();
+    }
     if (approve && pts > 0 && String(b.user_role) === "student") {
       await db
         .prepare("INSERT INTO ms_points (school_id, class_id, student_id, delta, reason, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
@@ -2824,6 +2833,125 @@ export async function handleMultiSchoolRequest(
     }
     if (!questions.length) return jsonOut({ error: "هوش مصنوعی سوالی تولید نکرد؛ موضوع را دقیق‌تر بنویسید." }, 502);
     return jsonOut({ ok: true, questions });
+  }
+
+  // ==================== 📖 آزمون خواندن (خلاصه + سوال هوش مصنوعی) ====================
+  if (path === "/api/ms/student/read" && request.method === "GET" && (isStudent || isParent)) {
+    const stId = Number(tok.studentId || 0);
+    const st: any = await db.prepare("SELECT * FROM ms_students WHERE id = ? AND school_id = ?").bind(stId, schoolId).first();
+    if (!st) return jsonOut({ error: "دانش‌آموز یافت نشد." }, 404);
+    const ps = await db.prepare("SELECT id, title, author, passage, added_by FROM ms_read_passages WHERE school_id = ? ORDER BY id DESC LIMIT 30").bind(schoolId).all();
+    const qs = await db.prepare("SELECT passage_id, score, total, finished_at FROM ms_read_quizzes WHERE school_id = ? AND student_id = ?").bind(schoolId, stId).all();
+    const doneMap = new Map<number, any>();
+    for (const q of ((qs.results || []) as any[])) {
+      doneMap.set(Number(q.passage_id), { score: Number(q.score || 0), total: Number(q.total || 0), finished: Boolean(String(q.finished_at || "")) });
+    }
+    return jsonOut({
+      passages: ((ps.results || []) as any[]).map((x) => ({
+        id: Number(x.id), title: x.title, author: x.author, addedBy: x.added_by,
+        excerpt: String(x.passage || "").slice(0, 220),
+        myQuiz: doneMap.get(Number(x.id)) || null,
+      })),
+    });
+  }
+  if (path === "/api/ms/student/read/passage" && request.method === "GET" && (isStudent || isParent)) {
+    const pid = Number((new URL(request.url)).searchParams.get("id") || 0);
+    const x: any = await db.prepare("SELECT id, title, author, passage, added_by FROM ms_read_passages WHERE id = ? AND school_id = ?").bind(pid, schoolId).first();
+    if (!x) return jsonOut({ error: "خلاصه یافت نشد." }, 404);
+    return jsonOut({ passage: { id: Number(x.id), title: x.title, author: x.author, passage: x.passage, addedBy: x.added_by } });
+  }
+  if (path === "/api/ms/student/read/start" && request.method === "POST" && isStudent) {
+    const body = (await request.json().catch(() => ({}))) as any;
+    const stId = Number(tok.studentId || 0);
+    const st: any = await db.prepare("SELECT * FROM ms_students WHERE id = ? AND school_id = ?").bind(stId, schoolId).first();
+    if (!st) return jsonOut({ error: "دانش‌آموز یافت نشد." }, 404);
+    const pid = Number(body.passageId || 0);
+    const x: any = await db.prepare("SELECT * FROM ms_read_passages WHERE id = ? AND school_id = ?").bind(pid, schoolId).first();
+    if (!x) return jsonOut({ error: "خلاصه یافت نشد." }, 404);
+    const passageText = String(x.passage || "").slice(0, 3000);
+    const sysP = "تو یک طراح سوال دقیق درک مطلب برای دانش‌آموزان ابتدایی ایران هستی. سوال‌ها فقط و فقط از متن داده‌شده ساخته می‌شوند، نه از دانش بیرونی. فقط JSON خروجی بده.";
+    const userP = "از متن خلاصه‌ی کتاب زیر دقیقاً 4 سوال چهارگزینه‌ای فارسی بساز. خروجی فقط JSON با این ساختار: {\"questions\":[{\"text\":\"...\",\"options\":[...4 گزینه...],\"answer\":0}]}. فیلد answer ایندکس عددی گزینه‌ی درست (0 تا 3). چهار گزینه هم‌اندازه و معقول باشد؛ سوال‌ها کاملاً به متن وابسته باشند. متن:" + String.fromCharCode(10, 10) + passageText;
+    let raw = "";
+    try {
+      if (typeof (deps as any).aiChat !== "function") return jsonOut({ error: "سرویس هوش مصنوعی در دسترس نیست." }, 503);
+      raw = String((await (deps as any).aiChat("auto", sysP, userP, "")) || "");
+    } catch (eA) {
+      return jsonOut({ error: "خطا در ساخت سوال‌ها: " + String((eA as any)?.message || eA).slice(0, 120) }, 502);
+    }
+    let questions: any[] = [];
+    try {
+      const i1 = raw.indexOf("{");
+      const i2 = raw.lastIndexOf("}");
+      const parsed = JSON.parse(i1 >= 0 && i2 > i1 ? raw.slice(i1, i2 + 1) : raw);
+      questions = (Array.isArray(parsed) ? parsed : parsed.questions || []).map((q: any) => {
+        const opts = (Array.isArray(q.options) ? q.options : []).map((o: any) => String(o ?? "").trim()).slice(0, 4);
+        while (opts.length < 4) opts.push("");
+        const ai2 = Number(q.answer);
+        const answer = isFinite(ai2) && ai2 >= 0 && ai2 <= 3 && opts[ai2] ? String(ai2) : "0";
+        return { text: String(q.text || "").trim(), options: opts, answer };
+      }).filter((q: any) => q.text.length >= 3);
+    } catch (eP) {
+      return jsonOut({ error: "پاسخ هوش مصنوعی قابل تفسیر نبود؛ دوباره تلاش کنید." }, 502);
+    }
+    if (questions.length < 2) return jsonOut({ error: "هوش مصنوعی سوال کافی نساخت؛ دوباره تلاش کنید." }, 502);
+    const total = questions.length;
+    await db
+      .prepare("INSERT INTO ms_read_quizzes (school_id, class_id, passage_id, student_id, questions, answers, chosen, score, total, created_at) VALUES (?, ?, ?, ?, ?, '[]', '[]', 0, ?, ?) ON CONFLICT(passage_id, student_id) DO UPDATE SET questions = excluded.questions, answers = excluded.answers, chosen = '[]', score = 0, total = excluded.total, created_at = excluded.created_at, finished_at = ''")
+      .bind(schoolId, Number(st.class_id || 0), pid, stId, JSON.stringify(questions), total, nowIso())
+      .run();
+    return jsonOut({ ok: true, total, questions: questions.map((q) => ({ text: q.text, options: q.options })) });
+  }
+  if (path === "/api/ms/student/read/submit" && request.method === "POST" && isStudent) {
+    const body = (await request.json().catch(() => ({}))) as any;
+    const stId = Number(tok.studentId || 0);
+    const pid = Number(body.passageId || 0);
+    const qz: any = await db.prepare("SELECT * FROM ms_read_quizzes WHERE passage_id = ? AND student_id = ? AND school_id = ?").bind(pid, stId, schoolId).first();
+    if (!qz) return jsonOut({ error: "آزمونی شروع نشده است." }, 404);
+    let questions: any[] = [];
+    try { questions = JSON.parse(String(qz.questions || "[]")); } catch (e) { questions = []; }
+    const chosen: number[] = (Array.isArray(body.answers) ? body.answers : []).map((v: any) => Number(v));
+    let score = 0;
+    const review = questions.map((q, i2) => {
+      const ch = isFinite(chosen[i2]) ? chosen[i2] : -1;
+      const correct = Number(q.answer);
+      const isCorrect = ch === correct;
+      if (isCorrect) score++;
+      return { text: q.text, options: q.options, chosen: ch, answer: correct, isCorrect };
+    });
+    const total = questions.length;
+    await db
+      .prepare("UPDATE ms_read_quizzes SET chosen = ?, score = ?, finished_at = ? WHERE id = ?")
+      .bind(JSON.stringify(chosen), score, nowIso(), Number(qz.id))
+      .run();
+    return jsonOut({ ok: true, score, total, review });
+  }
+  if (path === "/api/ms/teacher/read" && request.method === "GET" && (isTeacher || isAdmin)) {
+    const ps = await db.prepare("SELECT id, title, author, added_by, LENGTH(passage) plen FROM ms_read_passages WHERE school_id = ? ORDER BY id DESC LIMIT 30").bind(schoolId).all();
+    const qz = await db.prepare("SELECT q.passage_id, q.student_id, q.score, q.total, q.finished_at, s.name FROM ms_read_quizzes q LEFT JOIN ms_students s ON s.id = q.student_id WHERE q.school_id = ? AND q.finished_at != '' ORDER BY q.id DESC LIMIT 60").bind(schoolId).all();
+    return jsonOut({
+      passages: ((ps.results || []) as any[]).map((x) => ({ id: Number(x.id), title: x.title, author: x.author, addedBy: x.added_by, plen: Number(x.plen || 0) })),
+      results: ((qz.results || []) as any[]).map((x) => ({ passageId: Number(x.passage_id), studentId: Number(x.student_id), studentName: x.name || "", score: Number(x.score || 0), total: Number(x.total || 0) })),
+    });
+  }
+  if (path === "/api/ms/teacher/read/add" && request.method === "POST" && (isTeacher || isAdmin)) {
+    const body = (await request.json().catch(() => ({}))) as any;
+    const title = String(body.title || "").trim();
+    const passage = String(body.passage || "").trim();
+    if (title.length < 2) return jsonOut({ error: "عنوان کوتاه است." }, 400);
+    if (passage.length < 60) return jsonOut({ error: "متن خلاصه باید حداقل ۶۰ حرف باشد." }, 400);
+    const r = await db
+      .prepare("INSERT INTO ms_read_passages (school_id, class_id, title, author, passage, added_by, created_at) VALUES (?, 0, ?, ?, ?, ?, ?)")
+      .bind(schoolId, title, String(body.author || "").trim(), passage.slice(0, 3000), String(tok.name || "معلم"), nowIso())
+      .run();
+    await msTgBroadcast(db, deps, schoolId, "📖 خلاصه‌ی کتاب جدید در چالش کتاب‌خوانی: «" + title + "»" + String.fromCharCode(10) + "بخوانید و در آزمون خواندن شرکت کنید! 📝");
+    return jsonOut({ ok: true, id: Number((r as any)?.meta?.last_row_id || 0) });
+  }
+  if (path === "/api/ms/teacher/read/delete" && request.method === "POST" && (isTeacher || isAdmin)) {
+    const body = (await request.json().catch(() => ({}))) as any;
+    const pid = Number(body.id || 0);
+    await db.prepare("DELETE FROM ms_read_quizzes WHERE passage_id = ? AND school_id = ?").bind(pid, schoolId).run();
+    await db.prepare("DELETE FROM ms_read_passages WHERE id = ? AND school_id = ?").bind(pid, schoolId).run();
+    return jsonOut({ ok: true });
   }
 
   // ==================== پنل مدیر مدرسه ====================

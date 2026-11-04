@@ -1320,6 +1320,12 @@ const SCHOOL_JS = String.raw`
                 '<button class="btn btn-ghost btn-sm" onclick="activeTab=\'announce\';renderApp()">📢 اطلاعیه سراسری</button>' +
               '</div>' +
             '</div>' +
+            '<div class="card" style="margin-top:12px;">' +
+              '<div class="section-title">🔑 کلیدهای رایگان هوش مصنوعی (اختیاری)</div>' +
+              '<div class="muted" style="font-size:11.5px;">برای فعال‌سازی سرویس‌های بیشتر در «ساخت سوال با AI»، کلید رایگان آن‌ها را اینجا وارد کنید. (Google AI Studio / OpenRouter — هر دو رایگان)</div>' +
+              '<div style="display:flex;gap:8px;align-items:center;margin-top:8px;"><b style="width:110px;font-size:12px;">Google Gemini</b><input id="aikey_gemini" class="input" placeholder="کلید Gemini (AIza...)" style="flex:1;margin:0;" dir="ltr" /><button class="btn btn-emerald btn-sm" onclick="saveAiKey(\'gemini\')">ذخیره</button></div>' +
+              '<div style="display:flex;gap:8px;align-items:center;margin-top:8px;"><b style="width:110px;font-size:12px;">OpenRouter</b><input id="aikey_openrouter" class="input" placeholder="کلید OpenRouter (sk-or-...)" style="flex:1;margin:0;" dir="ltr" /><button class="btn btn-emerald btn-sm" onclick="saveAiKey(\'openrouter\')">ذخیره</button></div>' +
+            '</div>' +
             ((d.liveRooms || []).length
               ? '<div class="section-title">🔴 کلاس‌های زنده در حال برگزاری</div>' +
                 '<div class="card">' + d.liveRooms.map(function (r) {
@@ -2449,6 +2455,14 @@ const SCHOOL_JS = String.raw`
         }
         showToast("✅ " + added + " سوال به بانک اضافه شد");
         renderApp();
+      } catch (e) { showToast("❌ " + e.message); }
+    }
+
+    async function saveAiKey(prov) {
+      try {
+        var el = document.getElementById("aikey_" + prov);
+        await api("/api/ms/super/ai-keys", { provider: prov, key: (el || {}).value || "" });
+        showToast("✅ کلید ذخیره شد — معلمان اکنون می‌توانند این سرویس را انتخاب کنند");
       } catch (e) { showToast("❌ " + e.message); }
     }
 

@@ -11055,7 +11055,7 @@ async function handleAppRequest(
       verifyToken,
       normalizeDigits: core.normalizeDigits,
       askAI: async (question) => await core.askAI(env, question),
-      aiChat: async (provider: string, sys: string, usr: string, key?: string) => await core.aiChatComplete(env, provider, sys, usr, key),
+      aiChat: async (provider: string, sys: string, usr: string, key?: string) => await aiChatComplete(env, provider, sys, usr, key),
       transcribeAudio: async (audioDataUrl: string) => await dataUrlToTranscript(env, audioDataUrl),
       generateQuiz: async (topic, count) => await generateMultipleQuizzesWithAI(env, topic, count),
       aiTool: async (tool, p) => {

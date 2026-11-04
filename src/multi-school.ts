@@ -38,7 +38,21 @@ async function msAiCall(deps: any, db: any, provider: string, sys: string, user:
 // ---------------------------------------------------------------------------
 // جداول دیتابیس (خودکارسازی کامل — بدون نیاز به SQL دستی)
 // ---------------------------------------------------------------------------
+const _msSchemaMemo = new WeakMap<object, Promise<void>>();
 export async function ensureSchoolTables(db: D1Database): Promise<void> {
+  const key = db as unknown as object;
+  let p = _msSchemaMemo.get(key);
+  if (!p) {
+    p = ensureSchoolTablesInner(db).catch((e: any) => {
+      _msSchemaMemo.delete(key);
+      throw e;
+    });
+    _msSchemaMemo.set(key, p);
+  }
+  await p;
+}
+
+async function ensureSchoolTablesInner(db: D1Database): Promise<void> {
   await db
     .prepare(
       `CREATE TABLE IF NOT EXISTS schools (

@@ -2890,10 +2890,19 @@ export async function handleMultiSchoolRequest(
     if (!x) return jsonOut({ error: "خلاصه یافت نشد." }, 404);
     const passageText = String(x.passage || "").slice(0, 3000);
     let questions: any[] = [];
+    let fromCache = false;
     try {
       const cached = JSON.parse(String(x.questions_def || "[]"));
       if (Array.isArray(cached)) questions = cached.filter((q: any) => q && q.text && Array.isArray(q.options) && q.options.length === 4);
     } catch (eC) { questions = []; }
+    if (questions.length < 2) {
+      try {
+        const share: any = await db.prepare("SELECT questions FROM ms_read_quizzes WHERE passage_id = ? AND student_id = -1").bind(pid).first();
+        const cached2 = JSON.parse(String(share?.questions || "[]"));
+        if (Array.isArray(cached2)) questions = cached2.filter((q: any) => q && q.text && Array.isArray(q.options) && q.options.length === 4);
+      } catch (eC2) { questions = []; }
+    }
+    fromCache = questions.length >= 2;
     if (questions.length < 2) {
     const sysP = "تو یک طراح سوال دقیق درک مطلب برای دانش‌آموزان ابتدایی ایران هستی. سوال‌ها فقط و فقط از متن داده‌شده ساخته می‌شوند، نه از دانش بیرونی. فقط JSON خروجی بده.";
     const userP = "از متن خلاصه‌ی کتاب زیر دقیقاً 4 سوال چهارگزینه‌ای فارسی بساز. خروجی فقط JSON با این ساختار: {\"questions\":[{\"text\":\"...\",\"options\":[...4 گزینه...],\"answer\":0}]}. فیلد answer ایندکس عددی گزینه‌ی درست (0 تا 3). چهار گزینه هم‌اندازه و معقول باشد؛ سوال‌ها کاملاً به متن وابسته باشند. متن:" + String.fromCharCode(10, 10) + passageText;
@@ -2918,14 +2927,21 @@ export async function handleMultiSchoolRequest(
       return jsonOut({ error: "پاسخ هوش مصنوعی قابل تفسیر نبود؛ دوباره تلاش کنید." }, 502);
     }
     if (questions.length < 2) return jsonOut({ error: "هوش مصنوعی سوال کافی نساخت؛ دوباره تلاش کنید." }, 502);
-      await db.prepare("UPDATE ms_read_passages SET questions_def = ? WHERE id = ?").bind(JSON.stringify(questions), pid).run();
+      const qJson = JSON.stringify(questions);
+      try { await db.prepare("UPDATE ms_read_passages SET questions_def = ? WHERE id = ?").bind(qJson, pid).run(); } catch (eU) {}
+      try {
+        await db
+          .prepare("INSERT INTO ms_read_quizzes (school_id, class_id, passage_id, student_id, questions, answers, chosen, score, total, created_at) VALUES (?, 0, ?, -1, ?, '[]', '[]', 0, 0, ?) ON CONFLICT(passage_id, student_id) DO UPDATE SET questions = excluded.questions")
+          .bind(schoolId, pid, qJson, nowIso())
+          .run();
+      } catch (eS) {}
     }
     const total = questions.length;
     await db
       .prepare("INSERT INTO ms_read_quizzes (school_id, class_id, passage_id, student_id, questions, answers, chosen, score, total, created_at) VALUES (?, ?, ?, ?, ?, '[]', '[]', 0, ?, ?) ON CONFLICT(passage_id, student_id) DO UPDATE SET questions = excluded.questions, answers = excluded.answers, chosen = '[]', score = 0, total = excluded.total, created_at = excluded.created_at, finished_at = ''")
       .bind(schoolId, st ? Number(st.class_id || 0) : 0, pid, stId, JSON.stringify(questions), total, nowIso())
       .run();
-    return jsonOut({ ok: true, total, questions: questions.map((q) => ({ text: q.text, options: q.options })) });
+    return jsonOut({ ok: true, total, fromCache, questions: questions.map((q) => ({ text: q.text, options: q.options })) });
   }
   if (path === "/api/ms/student/read/submit" && request.method === "POST" && (isStudent || isTeacher || isAdmin)) {
     const body = (await request.json().catch(() => ({}))) as any;
@@ -2952,10 +2968,10 @@ export async function handleMultiSchoolRequest(
     return jsonOut({ ok: true, score, total, review });
   }
   if (path === "/api/ms/teacher/read" && request.method === "GET" && (isTeacher || isAdmin)) {
-    const ps = await db.prepare("SELECT id, title, author, translator, added_by, LENGTH(passage) plen FROM ms_read_passages WHERE school_id = ? ORDER BY id DESC LIMIT 30").bind(schoolId).all();
+    const ps = await db.prepare("SELECT id, title, author, translator, added_by, LENGTH(passage) plen, LENGTH(COALESCE(questions_def, '')) qlen FROM ms_read_passages WHERE school_id = ? ORDER BY id DESC LIMIT 30").bind(schoolId).all();
     const qz = await db.prepare("SELECT q.passage_id, q.student_id, q.score, q.total, q.finished_at, s.name FROM ms_read_quizzes q LEFT JOIN ms_students s ON s.id = q.student_id WHERE q.school_id = ? AND q.finished_at != '' AND q.student_id > 0 ORDER BY q.id DESC LIMIT 60").bind(schoolId).all();
     return jsonOut({
-      passages: ((ps.results || []) as any[]).map((x) => ({ id: Number(x.id), title: x.title, author: x.author, translator: x.translator || "", addedBy: x.added_by, plen: Number(x.plen || 0) })),
+      passages: ((ps.results || []) as any[]).map((x) => ({ id: Number(x.id), title: x.title, author: x.author, translator: x.translator || "", addedBy: x.added_by, plen: Number(x.plen || 0), qlen: Number(x.qlen || 0) })),
       results: ((qz.results || []) as any[]).map((x) => ({ passageId: Number(x.passage_id), studentId: Number(x.student_id), studentName: x.name || "", score: Number(x.score || 0), total: Number(x.total || 0) })),
     });
   }

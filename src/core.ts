@@ -5000,18 +5000,23 @@ async function handleSharedUserModeText(
 export async function aiChatComplete(env: Env, provider: string, system: string, user: string, key?: string): Promise<string> {
   const prov = String(provider || "auto");
   const NL = String.fromCharCode(10);
+  const timedFetch = async (url: string, init: any, ms: number) => {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), ms);
+    try { return await fetch(url, { ...init, signal: ctrl.signal }); } finally { clearTimeout(timer); }
+  };
   if (prov === "gemini") {
     const k = String(key || (env as any).GEMINI_API_KEY || "");
     if (!k) throw new Error("کلید Gemini تنظیم نشده است");
-    const geminiModels = ["gemini-3.8-flash", "gemini-flash-latest", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-2.5-flash-lite"];
+    const geminiModels = ["gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.8-flash", "gemini-flash-latest", "gemini-2.5-flash-lite"];
     let lastErr = "";
     for (const model of geminiModels) {
       try {
-        const response = await fetch("https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent?key=" + k, {
+        const response = await timedFetch("https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent?key=" + k, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ contents: [{ parts: [{ text: system + NL + NL + user }] }] }),
-        });
+        }, 22000);
         if (!response.ok) { lastErr = "خطای Gemini/" + model + " (" + response.status + ")"; continue; }
         const data = (await response.json()) as any;
         const txt = String(data?.candidates?.[0]?.content?.parts?.[0]?.text || "");
@@ -5026,20 +5031,20 @@ export async function aiChatComplete(env: Env, provider: string, system: string,
   if (prov === "openrouter") {
     const k = String(key || (env as any).OPENROUTER_API_KEY || "");
     if (!k) throw new Error("کلید OpenRouter تنظیم نشده است");
-    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    const response = await timedFetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
       headers: { Authorization: "Bearer " + k, "Content-Type": "application/json" },
       body: JSON.stringify({ model: "meta-llama/llama-3.3-70b-instruct:free", messages: [{ role: "system", content: system }, { role: "user", content: user }], temperature: 0.7, max_tokens: 1800 }),
-    });
+    }, 45000);
     if (!response.ok) throw new Error("خطای OpenRouter (" + response.status + ")");
     const data = (await response.json()) as any;
     return String(data?.choices?.[0]?.message?.content || "");
   }
-  const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+  const response = await timedFetch("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
     headers: { Authorization: "Bearer " + env.GROQ_API_KEY, "Content-Type": "application/json" },
     body: JSON.stringify({ model: "qwen/qwen3.8-27b", messages: [{ role: "system", content: system }, { role: "user", content: user }], temperature: 0.7, max_tokens: 1800 }),
-  });
+  }, 45000);
   if (!response.ok) throw new Error("خطای Groq (" + response.status + ")");
   const data = (await response.json()) as any;
   return String(data?.choices?.[0]?.message?.content || "");

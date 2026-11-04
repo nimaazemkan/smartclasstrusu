@@ -599,6 +599,7 @@ const SCHOOL_JS = String.raw`
                 '<button class="menu-item" onclick="activeTab=\'lab\';renderApp()"><span>🧠</span>کارگاه یادگیری</button>' +
                 '<button class="menu-item" onclick="activeTab=\'hw\';renderApp()"><span>📚</span>تکالیف من</button>' +
                 '<button class="menu-item" onclick="goTab(\'exams\')"><span>📝</span>آزمون‌های من</button>' +
+                '<button class="menu-item" onclick="goTab(\'books\')"><span>📚</span>چالش کتاب‌خوانی</button>' +
               '</div>' +
               '<div class="section-title">🎯 پیشرفت</div>' +
               '<div class="menu-grid">' +
@@ -651,6 +652,9 @@ const SCHOOL_JS = String.raw`
             '<div class="card"><table class="table"><thead><tr><th>تاریخ</th><th>وضعیت</th></tr></thead><tbody>' + attHtml + '</tbody></table></div>' +
             '<div class="section-title">🏅 امتیازات رفتاری</div>' +
             '<div class="card"><table class="table"><thead><tr><th>امتیاز</th><th>دلیل</th><th>تاریخ</th></tr></thead><tbody>' + ptsHtml + '</tbody></table></div>';
+        } else if (activeTab === "books") {
+          await renderStudentBooks(main);
+          return;
         } else if (activeTab === "exams") {
           await renderStudentExams(main);
           return;
@@ -794,6 +798,9 @@ const SCHOOL_JS = String.raw`
           return;
         } else if (activeTab === "pchat" || activeTab === "msgm") {
           await renderMsgM(main);
+          return;
+        } else if (activeTab === "booksm") {
+          await renderTeacherBooks(main);
           return;
         } else if (activeTab === "qbank") {
           await renderQBank(main);
@@ -1937,6 +1944,25 @@ const SCHOOL_JS = String.raw`
               }).join("")
             : '<div class="card"><div class="muted">هنوز آزمونی ساخته نشده است.</div></div>') +
           '<div class="card">' +
+            '<div class="section-title">✨ ساخت سوال با هوش مصنوعی</div>' +
+            '<div class="muted" style="font-size:11.5px;">سوال‌ها را هوش مصنوعی می‌سازد؛ قبل از افزودن به بانک، خودتان بررسی کنید. سرویس را انتخاب کنید:</div>' +
+            '<select id="ai_prov" class="input" style="margin-top:8px;"><option value="auto">✨ هوش سامانه (رایگان — پیش‌فرض)</option></select>' +
+            '<div class="muted" id="ai_note" style="font-size:10.5px;margin-top:3px;"></div>' +
+            '<div style="display:flex;gap:8px;margin-top:8px;">' +
+              '<input id="ai_grade" class="input" placeholder="پایه (مثلاً پنجم)" style="flex:1;" />' +
+              '<input id="ai_subj" class="input" placeholder="درس" style="flex:1;" />' +
+            '</div>' +
+            '<input id="ai_topic" class="input" placeholder="موضوع دقیق (مثلاً کسرها یا انرژی)" style="margin-top:6px;" />' +
+            '<div style="display:flex;gap:10px;align-items:center;margin-top:8px;flex-wrap:wrap;">' +
+              '<label style="display:flex;gap:5px;align-items:center;font-size:12px;cursor:pointer;"><input type="checkbox" id="ai_k_mcq" checked /> چهارگزینه‌ای</label>' +
+              '<label style="display:flex;gap:5px;align-items:center;font-size:12px;cursor:pointer;"><input type="checkbox" id="ai_k_tf" checked /> درست/نادرست</label>' +
+              '<span class="muted" style="font-size:11px;">تعداد:</span>' +
+              '<input id="ai_cnt" class="input" style="width:60px;margin:0;" dir="ltr" value="5" />' +
+              '<button class="btn btn-gold btn-sm" onclick="aiGenRun()">✨ ساخت سوال‌ها</button>' +
+            '</div>' +
+            '<div id="aiGenOut" style="margin-top:8px;"></div>' +
+          '</div>' +
+          '<div class="card">' +
             '<div class="section-title">➕ ساخت آزمون جدید</div>' +
             '<input id="ex_title" class="input" placeholder="عنوان آزمون (مثلاً ریاضی فصل ۳)" />' +
             '<input id="ex_subject" class="input" placeholder="درس" style="margin-top:6px;" />' +
@@ -1950,6 +1976,7 @@ const SCHOOL_JS = String.raw`
             '<button class="btn btn-emerald" style="margin-top:10px;" onclick="examCreate()">➕ ساخت آزمون</button>' +
           '</div>' +
           backBtnHtml();
+        try { aiGenInit(); } catch (eI) {}
       } catch (e) { main.innerHTML = '<div class="card">❌ ' + esc(e.message) + '</div>'; }
     }
 
@@ -2198,6 +2225,231 @@ const SCHOOL_JS = String.raw`
           }).join("") +
           backBtnHtml();
       } catch (e) { main.innerHTML = '<div class="card">❌ ' + esc(e.message) + '</div>'; }
+    }
+
+    // ==================== 📚 چالش کتاب‌خوانی ====================
+    function bookStatusChip(st) {
+      return st === "approved" ? "✅ تاییدشده" : st === "rejected" ? "❌ تاییدنشده" : "⏳ در انتظار تایید";
+    }
+
+    async function renderStudentBooks(main) {
+      try {
+        var d = await api("/api/ms/student/books");
+        main.innerHTML =
+          '<div class="section-title">📚 چالش کتاب‌خوانی</div>' +
+          '<div class="card">' +
+            '<div class="section-title">📖 کتاب جدید خواندم!</div>' +
+            '<input id="bk_title" class="input" placeholder="عنوان کتاب" />' +
+            '<input id="bk_author" class="input" placeholder="نویسنده (اختیاری)" style="margin-top:6px;" />' +
+            '<div style="display:flex;gap:8px;margin-top:6px;">' +
+              '<input id="bk_pages" class="input" placeholder="تعداد صفحات" style="flex:1;" dir="ltr" />' +
+              '<input id="bk_minutes" class="input" placeholder="زمان مطالعه (دقیقه)" style="flex:1;" dir="ltr" />' +
+            '</div>' +
+            '<textarea id="bk_summary" class="input" rows="2" placeholder="خلاصه‌ی کوتاه از کتاب (اختیاری)" style="margin-top:6px;"></textarea>' +
+            '<button class="btn btn-emerald" style="margin-top:10px;" onclick="bookSubmit()">📚 ثبت کتاب</button>' +
+            '<div class="muted" style="font-size:11px;margin-top:6px;">بعد از تایید معلم، امتیاز⭐ آن برایت ثبت می‌شود.</div>' +
+          '</div>' +
+          '<div class="section-title">📖 کتاب‌های من (' + (d.mine || []).length + ')</div>' +
+          ((d.mine || []).length
+            ? (d.mine || []).map(function (b) {
+                return '<div class="card" style="padding:10px;"><div style="display:flex;gap:8px;align-items:flex-start;">' +
+                  '<div style="flex:1;"><b>' + esc(b.title) + '</b>' + (b.author ? ' <span class="muted">— ' + esc(b.author) + '</span>' : "") +
+                  '<div class="muted" style="font-size:11px;margin-top:3px;">' + bookStatusChip(b.status) + (b.pages ? " • " + b.pages + " صفحه" : "") + (b.points ? " • +" + b.points + " ⭐" : "") + ' • ' + esc(b.date) + '</div>' +
+                  (b.feedback ? '<div class="muted" style="font-size:11px;margin-top:3px;">💬 ' + esc(b.feedback) + '</div>' : "") +
+                  '</div></div></div>';
+              }).join("")
+            : '<div class="card"><div class="muted">هنوز کتابی ثبت نکرده‌ای — اولین خواننده باش! 📚</div></div>') +
+          '<div class="section-title">🏆 برترین‌های کلاس</div>' +
+          ((d.board || []).length
+            ? '<div class="card"><table style="width:100%;font-size:12px;"><thead><tr><th style="text-align:right;">#</th><th style="text-align:right;">دانش‌آموز</th><th>کتاب</th><th>صفحه</th><th>⭐</th></tr></thead><tbody>' +
+              (d.board || []).map(function (b, i2) {
+                var medals = ["🥇", "🥈", "🥉"];
+                return '<tr><td>' + (medals[i2] || (i2 + 1)) + '</td><td>' + esc(b.name) + '</td><td style="text-align:center;">' + b.books + '</td><td style="text-align:center;">' + b.pages + '</td><td style="text-align:center;">' + b.points + '</td></tr>';
+              }).join("") + '</tbody></table></div>'
+            : '<div class="card"><div class="muted">هنوز کسی در کلاس کتابی ثبت نکرده است.</div></div>') +
+          ((d.shelf || []).length
+            ? '<div class="section-title">📚 قفسه‌ی معلم‌ها</div>' + (d.shelf || []).map(function (b) {
+                return '<div class="card" style="padding:9px;"><b>' + esc(b.title) + '</b> <span class="muted">— ' + esc(b.author || "") + '</span><div class="muted" style="font-size:11px;">👨‍🏫 ' + esc(b.name) + (b.pages ? " • " + b.pages + " صفحه" : "") + '</div></div>';
+              }).join("")
+            : "") +
+          backBtnHtml();
+      } catch (e) { main.innerHTML = '<div class="card">❌ ' + esc(e.message) + '</div>'; }
+    }
+
+    async function bookSubmit() {
+      try {
+        await api("/api/ms/student/books", {
+          title: document.getElementById("bk_title").value.trim(),
+          author: document.getElementById("bk_author").value.trim(),
+          pages: Number(document.getElementById("bk_pages").value || 0),
+          minutes: Number(document.getElementById("bk_minutes").value || 0),
+          summary: document.getElementById("bk_summary").value.trim()
+        });
+        showToast("📚 کتاب ثبت شد — بعد از تایید معلم امتیاز می‌گیری!");
+        renderApp();
+      } catch (e) { showToast("❌ " + e.message); }
+    }
+
+    async function renderTeacherBooks(main) {
+      try {
+        var d = await api("/api/ms/teacher/books");
+        main.innerHTML =
+          '<div class="section-title">📚 چالش کتاب‌خوانی</div>' +
+          ((d.pending || []).length
+            ? '<div class="section-title">⏳ کتاب‌های در انتظار تایید (' + (d.pending || []).length + ')</div>' +
+              (d.pending || []).map(function (b) {
+                return '<div class="card">' +
+                  '<b>📖 ' + esc(b.title) + '</b> ' + (b.author ? '<span class="muted">— ' + esc(b.author) + '</span>' : "") +
+                  '<div class="muted" style="font-size:11px;margin-top:3px;">👤 ' + esc(b.userName) + (b.pages ? " • " + b.pages + " صفحه" : "") + (b.minutes ? " • " + b.minutes + " دقیقه" : "") + '</div>' +
+                  (b.summary ? '<div class="muted" style="font-size:11.5px;margin-top:4px;">' + esc(b.summary) + '</div>' : "") +
+                  '<div style="display:flex;gap:6px;align-items:center;margin-top:8px;flex-wrap:wrap;">' +
+                    '<span class="muted" style="font-size:11px;">امتیاز:</span>' +
+                    '<input id="bkpts_' + b.id + '" class="input" style="width:70px;margin:0;" dir="ltr" value="5" />' +
+                    '<input id="bkfb_' + b.id + '" class="input" placeholder="بازخورد (اختیاری)" style="flex:1;min-width:120px;margin:0;" />' +
+                    '<button class="btn btn-emerald btn-sm" onclick="bookApprove(' + b.id + ', 1)">✅ تایید</button>' +
+                    '<button class="btn btn-ghost btn-sm" onclick="bookApprove(' + b.id + ', 0)">❌ رد</button>' +
+                  '</div></div>';
+              }).join("")
+            : "") +
+          '<div class="card">' +
+            '<div class="section-title">➕ کتابی که خودم خوانده‌ام</div>' +
+            '<input id="tbk_title" class="input" placeholder="عنوان کتاب" />' +
+            '<input id="tbk_author" class="input" placeholder="نویسنده" style="margin-top:6px;" />' +
+            '<div style="display:flex;gap:8px;margin-top:6px;">' +
+              '<input id="tbk_pages" class="input" placeholder="صفحات" style="flex:1;" dir="ltr" />' +
+              '<input id="tbk_minutes" class="input" placeholder="زمان (دقیقه)" style="flex:1;" dir="ltr" />' +
+            '</div>' +
+            '<textarea id="tbk_summary" class="input" rows="2" placeholder="خلاصه (اختیاری)" style="margin-top:6px;"></textarea>' +
+            '<button class="btn btn-gold" style="margin-top:10px;" onclick="bookTeacherAdd()">📚 ثبت در قفسه‌ی معلم‌ها</button>' +
+          '</div>' +
+          ((d.mine || []).length
+            ? '<div class="section-title">📚 قفسه‌ی من</div>' + (d.mine || []).map(function (b) {
+                return '<div class="card" style="padding:9px;display:flex;gap:8px;align-items:center;">' +
+                  '<div style="flex:1;"><b>' + esc(b.title) + '</b> <span class="muted">' + esc(b.author || "") + '</span><div class="muted" style="font-size:11px;">' + esc(b.date) + (b.pages ? " • " + b.pages + " صفحه" : "") + '</div></div>' +
+                  '<button class="btn btn-ghost btn-sm" onclick="bookDelete(' + b.id + ')">🗑</button>' +
+                '</div>';
+              }).join("")
+            : "") +
+          ((d.board || []).length
+            ? '<div class="section-title">🏆 برترین‌های کتاب‌خوان</div><div class="card"><table style="width:100%;font-size:12px;"><thead><tr><th style="text-align:right;">#</th><th style="text-align:right;">دانش‌آموز</th><th>کتاب</th><th>صفحه</th></tr></thead><tbody>' +
+              (d.board || []).map(function (b, i2) {
+                var medals = ["🥇", "🥈", "🥉"];
+                return '<tr><td>' + (medals[i2] || (i2 + 1)) + '</td><td>' + esc(b.name) + '</td><td style="text-align:center;">' + b.books + '</td><td style="text-align:center;">' + b.pages + '</td></tr>';
+              }).join("") + '</tbody></table></div>'
+            : "") +
+          backBtnHtml();
+      } catch (e) { main.innerHTML = '<div class="card">❌ ' + esc(e.message) + '</div>'; }
+    }
+
+    async function bookApprove(id, okFlag) {
+      try {
+        var ptsEl = document.getElementById("bkpts_" + id);
+        var fbEl = document.getElementById("bkfb_" + id);
+        await api("/api/ms/teacher/books/approve", {
+          id: id,
+          approve: !!okFlag,
+          points: ptsEl ? Number(normDigitsC(ptsEl.value) || 0) : 0,
+          feedback: fbEl ? fbEl.value.trim() : ""
+        });
+        showToast(okFlag ? "✅ کتاب تایید و امتیاز ثبت شد" : "📗 کتاب تایید نشد");
+        renderApp();
+      } catch (e) { showToast("❌ " + e.message); }
+    }
+
+    async function bookTeacherAdd() {
+      try {
+        await api("/api/ms/teacher/books", {
+          title: document.getElementById("tbk_title").value.trim(),
+          author: document.getElementById("tbk_author").value.trim(),
+          pages: Number(document.getElementById("tbk_pages").value || 0),
+          minutes: Number(document.getElementById("tbk_minutes").value || 0),
+          summary: document.getElementById("tbk_summary").value.trim()
+        });
+        showToast("📚 کتاب شما در قفسه‌ی معلم‌ها ثبت شد");
+        renderApp();
+      } catch (e) { showToast("❌ " + e.message); }
+    }
+
+    async function bookDelete(id) {
+      if (!confirm("این کتاب حذف شود؟")) return;
+      try { await api("/api/ms/teacher/books/delete", { id: id }); showToast("🗑 حذف شد"); renderApp(); } catch (e) { showToast("❌ " + e.message); }
+    }
+
+    // ==================== ✨ ساخت سوال با هوش مصنوعی ====================
+    var _aiGenQs = [];
+
+    async function aiGenInit() {
+      try {
+        var d = await api("/api/ms/teacher/ai/providers");
+        var sel = document.getElementById("ai_prov");
+        if (sel) {
+          sel.innerHTML = (d.providers || []).map(function (pr) {
+            return '<option value="' + pr.id + '" ' + (pr.available ? "" : "disabled") + '>' + esc(pr.name) + (pr.available ? "" : " (کلید تنظیم نشده)") + '</option>';
+          }).join("");
+        }
+        var nt = document.getElementById("ai_note");
+        if (nt && d.note) nt.textContent = d.note;
+      } catch (e) {}
+    }
+
+    async function aiGenRun() {
+      try {
+        var kinds = [];
+        if ((document.getElementById("ai_k_mcq") || {}).checked) kinds.push("mcq");
+        if ((document.getElementById("ai_k_tf") || {}).checked) kinds.push("tf");
+        if (!kinds.length) kinds = ["mcq", "tf"];
+        showToast("⏳ هوش مصنوعی در حال طراحی سوال...");
+        var d = await api("/api/ms/teacher/exams/ai-generate", {
+          provider: (document.getElementById("ai_prov") || {}).value || "auto",
+          grade: (document.getElementById("ai_grade") || {}).value || "",
+          subject: (document.getElementById("ai_subj") || {}).value || "",
+          topic: (document.getElementById("ai_topic") || {}).value || "",
+          count: Number((document.getElementById("ai_cnt") || {}).value || 5),
+          kinds: kinds
+        });
+        _aiGenQs = d.questions || [];
+        var out = document.getElementById("aiGenOut");
+        if (out) {
+          out.innerHTML = _aiGenQs.length
+            ? '<div class="section-title">✨ سوال‌های ساخته‌شده (قبل از افزودن بررسی کنید)</div>' +
+              _aiGenQs.map(function (q, i2) {
+                return '<div class="card" style="padding:9px;">' +
+                  '<label style="display:flex;gap:7px;align-items:flex-start;cursor:pointer;">' +
+                    '<input type="checkbox" class="aiq" value="' + i2 + '" checked style="margin-top:2px;" />' +
+                    '<span style="font-size:12.5px;"><b>' + esc(q.text) + '</b>' +
+                    (q.qtype === "mcq"
+                      ? '<div class="muted" style="font-size:11px;margin-top:3px;">' + q.options.map(function (o, oi) { return o ? (oi + 1) + ") " + esc(o) : ""; }).filter(Boolean).join(" | ") + ' — پاسخ: ' + (Number(q.answer) + 1) + '</div>'
+                      : '<div class="muted" style="font-size:11px;margin-top:3px;">درست/نادرست — پاسخ: ' + (q.answer === "true" ? "درست" : "نادرست") + '</div>') +
+                    '</span>' +
+                  '</label></div>';
+              }).join("") +
+              '<button class="btn btn-emerald" style="width:100%;" onclick="aiGenAddAll()">➕ افزودن سوال‌های انتخاب‌شده به بانک</button>'
+            : '<div class="muted">سوالی ساخته نشد.</div>';
+        }
+        showToast("✨ " + _aiGenQs.length + " سوال ساخته شد");
+      } catch (e) { showToast("❌ " + e.message); }
+    }
+
+    async function aiGenAddAll() {
+      try {
+        var picked = Array.prototype.filter.call(document.querySelectorAll(".aiq:checked"), function (x) { return true; });
+        var idxs = Array.prototype.map.call(picked, function (x) { return Number(x.value); });
+        if (!idxs.length) return showToast("هیچ سوالی انتخاب نشده است");
+        var added = 0;
+        for (var i2 = 0; i2 < idxs.length; i2++) {
+          var q = _aiGenQs[idxs[i2]];
+          if (!q) continue;
+          await api("/api/ms/teacher/questions", {
+            qtype: q.qtype, text: q.text, options: q.options, answer: q.answer,
+            subject: (document.getElementById("ai_subj") || {}).value || "",
+            chapter: (document.getElementById("ai_topic") || {}).value || "",
+            createdBy: "هوش مصنوعی"
+          });
+          added++;
+        }
+        showToast("✅ " + added + " سوال به بانک اضافه شد");
+        renderApp();
+      } catch (e) { showToast("❌ " + e.message); }
     }
 
     async function renderTeacherHw(main) {
@@ -3617,6 +3869,7 @@ const SCHOOL_JS = String.raw`
               '<button class="menu-item" onclick="goTab(\'grades\')"><span>📝</span>ثبت نمره</button>' +
                 '<button class="menu-item" onclick="goTab(\'qbank\')"><span>🗄</span>بانک سوال</button>' +
                 '<button class="menu-item" onclick="goTab(\'exams\')"><span>📝</span>آزمون‌ها</button>' +
+                '<button class="menu-item" onclick="goTab(\'booksm\')"><span>📚</span>چالش کتاب‌خوانی</button>' +
               '<button class="menu-item" onclick="goTab(\'hw\')"><span>📚</span>تکالیف</button>' +
               '<button class="menu-item" onclick="goTab(\'ai\')"><span>🤖</span>ابزار هوش مصنوعی</button>' +
               '<button class="menu-item" onclick="goTab(\'class\')"><span>🏆</span>کلاس و کدها</button>' +
@@ -4163,6 +4416,7 @@ export function buildSchoolHtml(): string {
     <div class="container" id="mainView"></div>
     <nav class="bottom-nav" id="bottomNav"><div class="bottom-nav-inner"></div></nav>
   </div>
+  <footer style="text-align:center;padding:10px 14px 14px;font-size:11px;color:#94A3B8;">© سازنده: <b>نیما آزمکان</b> — کلیه حقوق مادی و معنوی این سامانه (نرم‌افزار، طراحی، محتوا و برند) متعلق به ایشان است.</footer>
   <div id="toast"></div>
   <script>
 ${SCHOOL_JS}

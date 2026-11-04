@@ -46,6 +46,8 @@ const waitingAiQuestion: Record<number, boolean> = {};
 export interface Env {
   telegram_bot_db: D1Database;
   GROQ_API_KEY: string;
+  GEMINI_API_KEY?: string;
+  OPENROUTER_API_KEY?: string;
   PUBLIC_APP_URL?: string;
   AI?: any;
 }
@@ -4995,6 +4997,43 @@ async function handleSharedUserModeText(
 }
 
 // ==================== ساخت ربات ====================
+export async function aiChatComplete(env: Env, provider: string, system: string, user: string, key?: string): Promise<string> {
+  const prov = String(provider || "auto");
+  const NL = String.fromCharCode(10);
+  if (prov === "gemini") {
+    const k = String(key || (env as any).GEMINI_API_KEY || "");
+    if (!k) throw new Error("کلید Gemini تنظیم نشده است");
+    const response = await fetch("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=" + k, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ contents: [{ parts: [{ text: system + NL + NL + user }] }] }),
+    });
+    if (!response.ok) throw new Error("خطای Gemini (" + response.status + ")");
+    const data = (await response.json()) as any;
+    return String(data?.candidates?.[0]?.content?.parts?.[0]?.text || "");
+  }
+  if (prov === "openrouter") {
+    const k = String(key || (env as any).OPENROUTER_API_KEY || "");
+    if (!k) throw new Error("کلید OpenRouter تنظیم نشده است");
+    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: { Authorization: "Bearer " + k, "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "meta-llama/llama-3.3-70b-instruct:free", messages: [{ role: "system", content: system }, { role: "user", content: user }], temperature: 0.7, max_tokens: 1800 }),
+    });
+    if (!response.ok) throw new Error("خطای OpenRouter (" + response.status + ")");
+    const data = (await response.json()) as any;
+    return String(data?.choices?.[0]?.message?.content || "");
+  }
+  const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+    method: "POST",
+    headers: { Authorization: "Bearer " + env.GROQ_API_KEY, "Content-Type": "application/json" },
+    body: JSON.stringify({ model: "qwen/qwen3.8-27b", messages: [{ role: "system", content: system }, { role: "user", content: user }], temperature: 0.7, max_tokens: 1800 }),
+  });
+  if (!response.ok) throw new Error("خطای Groq (" + response.status + ")");
+  const data = (await response.json()) as any;
+  return String(data?.choices?.[0]?.message?.content || "");
+}
+
 function createBot(env: Env) {
   const bot = new Bot(BOT_TOKEN);
 
@@ -11016,6 +11055,7 @@ async function handleAppRequest(
       verifyToken,
       normalizeDigits: core.normalizeDigits,
       askAI: async (question) => await core.askAI(env, question),
+      aiChat: async (provider: string, sys: string, usr: string, key?: string) => await core.aiChatComplete(env, provider, sys, usr, key),
       transcribeAudio: async (audioDataUrl: string) => await dataUrlToTranscript(env, audioDataUrl),
       generateQuiz: async (topic, count) => await generateMultipleQuizzesWithAI(env, topic, count),
       aiTool: async (tool, p) => {

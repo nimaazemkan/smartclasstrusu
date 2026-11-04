@@ -342,6 +342,14 @@ export const LIVE_CLASS_JS = String.raw`
         liveState.sinceSignalId = 0;
         showToast("🟢 کلاس زنده آغاز شد! (" + (r.notified || 0) + " اعلان تلگرام ارسال گردید)");
         await pollLiveClassroomOnce(true);
+        try {
+          if (!liveState.localStream) {
+            await startMyLiveMedia("video");
+            showToast("📷 دوربین و میکروفون شما روشن شد — دانش‌آموزان اکنون شما را می‌بینند.");
+          }
+        } catch (eM) {
+          showToast("⚠️ دوربین روشن نشد — از دکمه «📹 دوربین و صدا» استفاده کنید و اجازه‌ی دسترسی بدهید.");
+        }
       } catch (e) {
         showToast("❌ " + e.message);
       }
@@ -1352,14 +1360,36 @@ export const LIVE_CLASS_JS = String.raw`
       }
     }
 
+    function retryLivePeer(senderKey) {
+      if (!senderKey) return;
+      try { if (liveState.inPeers[senderKey]) liveState.inPeers[senderKey].close(); } catch (e) {}
+      delete liveState.inPeers[senderKey];
+      try { if (liveState.outPeers[senderKey]) liveState.outPeers[senderKey].close(); } catch (e) {}
+      delete liveState.outPeers[senderKey];
+      delete liveState.remoteStreams[senderKey];
+      liveApi("/api/app/live/signal", { to: senderKey, kind: "bye", payload: { retry: true } }).catch(function() {});
+      refreshVideoTilesDom();
+      showToast("🔄 در حال اتصال مجدد به پخش زنده...");
+    }
+
     async function ensureOutboundConnectionsToListeners() {
       if (!liveState.localStream || liveState.localMediaKind === "none") return;
       for (var i = 0; i < liveState.participants.length; i++) {
         var p = liveState.participants[i];
         if (!p.key || p.key === liveState.myKey) continue;
         var existing = liveState.outPeers[p.key];
-        if (existing && existing.connectionState !== "failed" && existing.connectionState !== "closed" && existing.iceConnectionState !== "failed") {
-          continue;
+        if (existing) {
+          var cs = existing.connectionState, ics = existing.iceConnectionState;
+          var deadNow = cs === "failed" || cs === "closed" || ics === "failed" || ics === "closed";
+          if (ics === "disconnected") {
+            if (!existing._discSince) existing._discSince = Date.now();
+            if (Date.now() - existing._discSince > 8000) deadNow = true;
+          } else {
+            existing._discSince = 0;
+          }
+          if (!deadNow) continue;
+          try { existing.close(); } catch (e) {}
+          delete liveState.outPeers[p.key];
         }
         if (existing) {
           try { existing.close(); } catch (e) {}
@@ -1413,6 +1443,10 @@ export const LIVE_CLASS_JS = String.raw`
           if (liveState.inPeers[sig.from]) {
             try { liveState.inPeers[sig.from].close(); } catch (e) {}
             delete liveState.inPeers[sig.from];
+          }
+          if (liveState.outPeers[sig.from]) {
+            try { liveState.outPeers[sig.from].close(); } catch (e) {}
+            delete liveState.outPeers[sig.from];
           }
           delete liveState.remoteStreams[sig.from];
           refreshVideoTilesDom();
@@ -1521,6 +1555,13 @@ export const LIVE_CLASS_JS = String.raw`
         });
       });
 
+      (liveState.participants || []).forEach(function(p) {
+        if (!p || !p.key || p.key === liveState.myKey) return;
+        if (!p.mediaActive || p.mediaActive === "none") return;
+        if (liveState.remoteStreams[p.key]) return;
+        tiles.push({ key: "pend_" + p.key, label: (p.role === "teacher" ? "👨‍🏫 استاد " : "🗣 ") + (p.name || ""), stream: null, muted: true, kind: "pending", srcKey: p.key });
+      });
+
       grid.classList.toggle("has-two", tiles.length >= 2);
 
       if (tiles.length === 0) {
@@ -1540,6 +1581,8 @@ export const LIVE_CLASS_JS = String.raw`
           var startMuted = t.muted ? true : !window._liveSoundOn;
           var audioPlaceholder = t.kind === "audio"
             ? '<div style="text-align:center;padding:24px;"><div style="font-size:34px;">🎙🔊</div><div style="font-weight:800;margin-top:6px;color:#6EE7B7;">پخش زنده صوتی فعال</div></div>'
+            : t.kind === "pending"
+            ? '<div style="text-align:center;padding:22px;"><div style="font-size:32px;">📡</div><div style="font-weight:800;margin-top:6px;color:#93C5FD;">در حال اتصال به پخش زنده...</div><div class="muted" style="font-size:11px;margin-top:4px;">اگر تصویر نمایش داده نشد، دکمه زیر را بزنید</div><button class="btn btn-gold btn-sm" style="margin-top:8px;" onclick="retryLivePeer(\' + String(t.srcKey || "") + \')">🔄 تلاش مجدد اتصال</button></div>'
             : '';
           return '<div class="live-video-tile" style="position:relative;">' +
             audioPlaceholder +
@@ -1557,7 +1600,7 @@ export const LIVE_CLASS_JS = String.raw`
         if (!vEl) return;
         var wantMuted = t.muted ? true : !window._liveSoundOn;
         try { if (vEl.muted !== wantMuted) vEl.muted = wantMuted; } catch (e) {}
-        if (vEl.srcObject !== t.stream) {
+        if (t.stream && vEl.srcObject !== t.stream) {
           try { vEl.srcObject = t.stream; } catch (e) {}
         }
         var playPromise = null;

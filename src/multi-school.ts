@@ -278,6 +278,8 @@ export async function ensureSchoolTables(db: D1Database): Promise<void> {
   await db.prepare("CREATE TABLE IF NOT EXISTS ms_exams (id INTEGER PRIMARY KEY AUTOINCREMENT, school_id INTEGER, class_id INTEGER, title TEXT DEFAULT '', subject TEXT DEFAULT '', question_ids TEXT DEFAULT '[]', duration_min INTEGER DEFAULT 20, start_at TEXT DEFAULT '', end_at TEXT DEFAULT '', status TEXT DEFAULT 'draft', created_by TEXT DEFAULT '', created_at TEXT DEFAULT '', published_at TEXT DEFAULT '')").run();
   await db.prepare("CREATE TABLE IF NOT EXISTS ms_exam_attempts (id INTEGER PRIMARY KEY AUTOINCREMENT, school_id INTEGER, exam_id INTEGER, student_id INTEGER, answers TEXT DEFAULT '{}', manual_scores TEXT DEFAULT '{}', score REAL DEFAULT 0, max_score REAL DEFAULT 0, auto_score REAL DEFAULT 0, started_at TEXT DEFAULT '', submitted_at TEXT DEFAULT '', status TEXT DEFAULT 'in_progress', late INTEGER DEFAULT 0)").run();
   await db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS ux_ms_exam_attempt ON ms_exam_attempts (exam_id, student_id)").run();
+  await db.prepare("CREATE TABLE IF NOT EXISTS ms_books (id INTEGER PRIMARY KEY AUTOINCREMENT, school_id INTEGER, class_id INTEGER DEFAULT 0, user_role TEXT DEFAULT 'student', user_id INTEGER DEFAULT 0, user_name TEXT DEFAULT '', title TEXT DEFAULT '', author TEXT DEFAULT '', pages INTEGER DEFAULT 0, minutes INTEGER DEFAULT 0, summary TEXT DEFAULT '', status TEXT DEFAULT 'pending', points REAL DEFAULT 0, feedback TEXT DEFAULT '', created_at TEXT DEFAULT '')").run();
+  await db.prepare("CREATE TABLE IF NOT EXISTS ms_ai_keys (provider TEXT PRIMARY KEY, api_key TEXT DEFAULT '', updated_at TEXT DEFAULT '')").run();
   await db
     .prepare(`CREATE TABLE IF NOT EXISTS ms_tg_msgmap (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -2663,6 +2665,165 @@ export async function handleMultiSchoolRequest(
         };
       }),
     });
+  }
+
+  // ==================== 📚 چالش کتاب‌خوانی ====================
+  if (path === "/api/ms/student/books" && request.method === "GET" && (isStudent || isParent)) {
+    const stId = Number(tok.studentId || 0);
+    const st: any = await db.prepare("SELECT * FROM ms_students WHERE id = ? AND school_id = ?").bind(stId, schoolId).first();
+    if (!st) return jsonOut({ error: "دانش‌آموز یافت نشد." }, 404);
+    const mine = await db.prepare("SELECT * FROM ms_books WHERE school_id = ? AND user_role = 'student' AND user_id = ? ORDER BY id DESC LIMIT 50").bind(schoolId, stId).all();
+    const board = await db.prepare("SELECT user_id, user_name, COUNT(*) c, COALESCE(SUM(pages),0) pg, COALESCE(SUM(points),0) pts FROM ms_books WHERE school_id = ? AND class_id = ? AND user_role = 'student' AND status = 'approved' GROUP BY user_id ORDER BY c DESC, pg DESC LIMIT 15").bind(schoolId, Number(st.class_id)).all();
+    const shelf = await db.prepare("SELECT user_name, title, author, pages FROM ms_books WHERE school_id = ? AND user_role = 'teacher' AND status = 'approved' ORDER BY id DESC LIMIT 12").bind(schoolId).all();
+    return jsonOut({
+      mine: ((mine.results || []) as any[]).map((b) => ({ id: Number(b.id), title: b.title, author: b.author, pages: Number(b.pages || 0), minutes: Number(b.minutes || 0), summary: b.summary, status: b.status, points: Number(b.points || 0), feedback: b.feedback || "", date: String(b.created_at || "").split("T")[0] })),
+      board: ((board.results || []) as any[]).map((b) => ({ userId: Number(b.user_id), name: b.user_name, books: Number(b.c || 0), pages: Number(b.pg || 0), points: Number(b.pts || 0) })),
+      shelf: ((shelf.results || []) as any[]).map((b) => ({ name: b.user_name, title: b.title, author: b.author, pages: Number(b.pages || 0) })),
+    });
+  }
+  if (path === "/api/ms/student/books" && request.method === "POST" && isStudent) {
+    const body = (await request.json().catch(() => ({}))) as any;
+    const stId = Number(tok.studentId || 0);
+    const st: any = await db.prepare("SELECT * FROM ms_students WHERE id = ? AND school_id = ?").bind(stId, schoolId).first();
+    if (!st) return jsonOut({ error: "دانش‌آموز یافت نشد." }, 404);
+    const title = String(body.title || "").trim();
+    if (title.length < 2) return jsonOut({ error: "عنوان کتاب کوتاه است." }, 400);
+    const r = await db
+      .prepare("INSERT INTO ms_books (school_id, class_id, user_role, user_id, user_name, title, author, pages, minutes, summary, status, created_at) VALUES (?, ?, 'student', ?, ?, ?, ?, ?, ?, ?, 'pending', ?)")
+      .bind(schoolId, Number(st.class_id), stId, st.name, title, String(body.author || "").trim(), Number(body.pages || 0) || 0, Number(body.minutes || 0) || 0, String(body.summary || "").trim().slice(0, 600), nowIso())
+      .run();
+    await msTgNotifyTeachers(db, deps, schoolId, "📚 کتاب جدید در چالش کتاب‌خوانی\n👤 " + st.name + "\n📖 " + title + (String(body.author || "").trim() ? " — " + String(body.author).trim() : "") + "\nبرای تایید و امتیاز، به بخش کتاب‌خوانی در اپ بروید.");
+    return jsonOut({ ok: true, id: Number((r as any)?.meta?.last_row_id || 0) });
+  }
+  if (path === "/api/ms/teacher/books" && request.method === "GET" && (isTeacher || isAdmin)) {
+    const tId = Number(tok.teacherId || 0);
+    const pend = await db.prepare("SELECT * FROM ms_books WHERE school_id = ? AND status = 'pending' ORDER BY id DESC LIMIT 50").bind(schoolId).all();
+    const recent = await db.prepare("SELECT * FROM ms_books WHERE school_id = ? AND status != 'pending' ORDER BY id DESC LIMIT 40").bind(schoolId).all();
+    const mine = await db.prepare("SELECT * FROM ms_books WHERE school_id = ? AND user_role = 'teacher' AND user_id = ? ORDER BY id DESC LIMIT 30").bind(schoolId, tId).all();
+    const board = await db.prepare("SELECT user_id, user_name, COUNT(*) c, COALESCE(SUM(pages),0) pg FROM ms_books WHERE school_id = ? AND user_role = 'student' AND status = 'approved' GROUP BY user_id ORDER BY c DESC, pg DESC LIMIT 15").bind(schoolId).all();
+    const mapB = (b: any) => ({ id: Number(b.id), userRole: b.user_role, userId: Number(b.user_id), userName: b.user_name, title: b.title, author: b.author, pages: Number(b.pages || 0), minutes: Number(b.minutes || 0), summary: b.summary, status: b.status, points: Number(b.points || 0), feedback: b.feedback || "", date: String(b.created_at || "").split("T")[0] });
+    return jsonOut({
+      pending: ((pend.results || []) as any[]).map(mapB),
+      recent: ((recent.results || []) as any[]).map(mapB),
+      mine: ((mine.results || []) as any[]).map(mapB),
+      board: ((board.results || []) as any[]).map((b) => ({ userId: Number(b.user_id), name: b.user_name, books: Number(b.c || 0), pages: Number(b.pg || 0) })),
+    });
+  }
+  if (path === "/api/ms/teacher/books" && request.method === "POST" && (isTeacher || isAdmin)) {
+    const body = (await request.json().catch(() => ({}))) as any;
+    const tId = Number(tok.teacherId || 0);
+    const tName = String(tok.name || "معلم");
+    const title = String(body.title || "").trim();
+    if (title.length < 2) return jsonOut({ error: "عنوان کتاب کوتاه است." }, 400);
+    const r = await db
+      .prepare("INSERT INTO ms_books (school_id, class_id, user_role, user_id, user_name, title, author, pages, minutes, summary, status, created_at) VALUES (?, 0, 'teacher', ?, ?, ?, ?, ?, ?, ?, 'approved', ?)")
+      .bind(schoolId, tId, tName, title, String(body.author || "").trim(), Number(body.pages || 0) || 0, Number(body.minutes || 0) || 0, String(body.summary || "").trim().slice(0, 600), nowIso())
+      .run();
+    return jsonOut({ ok: true, id: Number((r as any)?.meta?.last_row_id || 0) });
+  }
+  if (path === "/api/ms/teacher/books/approve" && request.method === "POST" && (isTeacher || isAdmin)) {
+    const body = (await request.json().catch(() => ({}))) as any;
+    const b: any = await db.prepare("SELECT * FROM ms_books WHERE id = ? AND school_id = ?").bind(Number(body.id || 0), schoolId).first();
+    if (!b) return jsonOut({ error: "کتاب یافت نشد." }, 404);
+    const approve = body.approve !== false;
+    const pts = Math.max(0, msNum(body.points) || 0);
+    const fb = String(body.feedback || "").trim();
+    await db.prepare("UPDATE ms_books SET status = ?, points = ?, feedback = ? WHERE id = ?").bind(approve ? "approved" : "rejected", approve ? pts : 0, fb, Number(b.id)).run();
+    if (approve && pts > 0 && String(b.user_role) === "student") {
+      await db
+        .prepare("INSERT INTO ms_points (school_id, class_id, student_id, delta, reason, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+        .bind(schoolId, Number(b.class_id || 0), Number(b.user_id), pts, "چالش کتاب‌خوانی: " + String(b.title || "").slice(0, 40), "معلم", nowIso())
+        .run();
+      await msSyncLegacyScore(db, Number(b.user_id), pts);
+      await msTgNotifyStudent(db, deps, schoolId, Number(b.user_id), "📚 کتاب «" + String(b.title || "") + "» تایید شد! (+" + pts + " ⭐)" + (fb ? "\n💬 " + fb : ""));
+    } else if (!approve && String(b.user_role) === "student") {
+      await msTgNotifyStudent(db, deps, schoolId, Number(b.user_id), "📗 ثبت کتاب «" + String(b.title || "") + "» تایید نشد." + (fb ? "\n💬 " + fb : ""));
+    }
+    return jsonOut({ ok: true });
+  }
+  if (path === "/api/ms/teacher/books/delete" && request.method === "POST" && (isTeacher || isAdmin)) {
+    const body = (await request.json().catch(() => ({}))) as any;
+    await db.prepare("DELETE FROM ms_books WHERE id = ? AND school_id = ?").bind(Number(body.id || 0), schoolId).run();
+    return jsonOut({ ok: true });
+  }
+
+  // ==================== ✨ ساخت سوال با هوش مصنوعی ====================
+  if (path === "/api/ms/teacher/ai/providers" && request.method === "GET" && (isTeacher || isAdmin)) {
+    const keys = await db.prepare("SELECT provider FROM ms_ai_keys WHERE api_key != ''").all();
+    const have = new Set(((keys.results || []) as any[]).map((k) => String(k.provider)));
+    return jsonOut({
+      providers: [
+        { id: "auto", name: "✨ هوش سامانه (رایگان — پیش‌فرض)", available: true },
+        { id: "gemini", name: "Google Gemini (رایگان)", available: have.has("gemini") },
+        { id: "openrouter", name: "OpenRouter (رایگان)", available: have.has("openrouter") },
+      ],
+      note: "سرویس‌های پولی (مثل Claude) پشتیبانی نمی‌شوند — فقط نسخه‌های رایگان.",
+    });
+  }
+  if (path === "/api/ms/super/ai-keys" && request.method === "GET") {
+    if (!isSuper) return jsonOut({ error: "دسترسی ندارید." }, 403);
+    const rows = await db.prepare("SELECT provider, updated_at FROM ms_ai_keys").all();
+    return jsonOut({ keys: (rows.results || []).map((r: any) => ({ provider: r.provider, hasKey: Boolean(r.api_key), updatedAt: r.updated_at })) });
+  }
+  if (path === "/api/ms/super/ai-keys" && request.method === "POST") {
+    if (!isSuper) return jsonOut({ error: "دسترسی ندارید." }, 403);
+    const body = (await request.json().catch(() => ({}))) as any;
+    const provider = String(body.provider || "").trim();
+    if (!["gemini", "openrouter"].includes(provider)) return jsonOut({ error: "سرویس نامعتبر است." }, 400);
+    await db.prepare("INSERT INTO ms_ai_keys (provider, api_key, updated_at) VALUES (?, ?, ?) ON CONFLICT(provider) DO UPDATE SET api_key = excluded.api_key, updated_at = excluded.updated_at").bind(provider, String(body.key || "").trim(), nowIso()).run();
+    return jsonOut({ ok: true });
+  }
+  if (path === "/api/ms/teacher/exams/ai-generate" && request.method === "POST" && (isTeacher || isAdmin)) {
+    const body = (await request.json().catch(() => ({}))) as any;
+    const provider = String(body.provider || "auto");
+    const subject = String(body.subject || "").trim();
+    const topic = String(body.topic || "").trim();
+    const grade = String(body.grade || "").trim();
+    const count = Math.max(1, Math.min(10, Number(body.count || 5)));
+    const kinds = (Array.isArray(body.kinds) ? body.kinds : ["mcq", "tf"]).map(String);
+    if (!topic && !subject) return jsonOut({ error: "درس یا موضوع را وارد کنید." }, 400);
+    let key = "";
+    if (provider === "gemini" || provider === "openrouter") {
+      const kr: any = await db.prepare("SELECT api_key FROM ms_ai_keys WHERE provider = ?").bind(provider).first();
+      key = String(kr?.api_key || "");
+      if (!key) return jsonOut({ error: "کلید رایگان این سرویس هنوز تنظیم نشده است." }, 400);
+    }
+    const kindFa = kinds.includes("mcq") && kinds.includes("tf") ? "ترکیبی از چهارگزینه‌ای و درست/نادرست" : kinds.includes("tf") ? "درست/نادرست" : "چهارگزینه‌ای";
+    const sysP = "تو یک طراح سوال دقیق برای مدرسه‌ی ابتدایی ایران هستی. فقط و فقط JSON خروجی بده، بدون هیچ متن اضافه.";
+    const userP = "برای " + (grade ? "پایه‌ی " + grade + " " : "") + "درس " + (subject || "عمومی") + "، درباره‌ی «" + (topic || subject) + "» دقیقاً " + count + " سوال " + kindFa + " طرح کن. خروجی فقط JSON با این ساختار: {\"questions\":[{\"qtype\":\"mcq\",\"text\":\"...\",\"options\":[...4...],\"answer\":1},{...tf...}]}. برای mcq فیلد answer ایندکس عددی گزینه‌ی درست (0 تا 3) و برای tf مقدار true یا false. متن سوال‌ها فارسی روان و کاملاً مرتبط با موضوع باشد؛ هیچ سوال حاشیه‌ای نساز.";
+    let raw = "";
+    try {
+      if (typeof (deps as any).aiChat === "function") {
+        raw = String(await (deps as any).aiChat(provider, sysP, userP, key) || "");
+      } else {
+        return jsonOut({ error: "سرویس هوش مصنوعی در دسترس نیست." }, 503);
+      }
+    } catch (eA) {
+      return jsonOut({ error: "خطا در ارتباط با هوش مصنوعی: " + String((eA as any)?.message || eA).slice(0, 120) }, 502);
+    }
+    let questions: any[] = [];
+    try {
+      const i1 = raw.indexOf("{");
+      const i2 = raw.lastIndexOf("}");
+      const parsed = JSON.parse(i1 >= 0 && i2 > i1 ? raw.slice(i1, i2 + 1) : raw);
+      questions = (Array.isArray(parsed) ? parsed : parsed.questions || []).map((q: any) => {
+        const qtype = ["mcq", "tf"].includes(String(q.qtype)) ? String(q.qtype) : "mcq";
+        const opts = (Array.isArray(q.options) ? q.options : []).map((o: any) => String(o ?? "").trim()).slice(0, 4);
+        while (opts.length < 4) opts.push("");
+        let answer = q.answer;
+        if (qtype === "mcq") {
+          const ai2 = Number(answer);
+          answer = isFinite(ai2) && ai2 >= 0 && ai2 <= 3 && opts[ai2] ? String(ai2) : "0";
+        } else {
+          answer = String(answer) === "false" ? "false" : "true";
+        }
+        return { qtype, text: String(q.text || "").trim(), options: qtype === "mcq" ? opts : ["درست", "نادرست"], answer };
+      }).filter((q: any) => q.text.length >= 3);
+    } catch (eP) {
+      return jsonOut({ error: "پاسخ هوش مصنوعی قابل تفسیر نبود؛ دوباره تلاش کنید." }, 502);
+    }
+    if (!questions.length) return jsonOut({ error: "هوش مصنوعی سوالی تولید نکرد؛ موضوع را دقیق‌تر بنویسید." }, 502);
+    return jsonOut({ ok: true, questions });
   }
 
   // ==================== پنل مدیر مدرسه ====================

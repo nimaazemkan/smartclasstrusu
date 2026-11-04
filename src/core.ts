@@ -5031,14 +5031,25 @@ export async function aiChatComplete(env: Env, provider: string, system: string,
   if (prov === "openrouter") {
     const k = String(key || (env as any).OPENROUTER_API_KEY || "");
     if (!k) throw new Error("کلید OpenRouter تنظیم نشده است");
-    const response = await timedFetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
-      headers: { Authorization: "Bearer " + k, "Content-Type": "application/json" },
-      body: JSON.stringify({ model: "meta-llama/llama-3.3-70b-instruct:free", messages: [{ role: "system", content: system }, { role: "user", content: user }], temperature: 0.7, max_tokens: 1800 }),
-    }, 45000);
-    if (!response.ok) throw new Error("خطای OpenRouter (" + response.status + ")");
-    const data = (await response.json()) as any;
-    return String(data?.choices?.[0]?.message?.content || "");
+    const orModels = ["google/gemma-4-31b-it:free", "nvidia/nemotron-3-ultra-550b-a55b:free", "google/gemma-4-26b-a4b-it:free", "nvidia/nemotron-3.5-lightning:free", "xingchen-agi/xing4.0-29b-a4b:free"];
+    let lastErr = "";
+    for (const model of orModels) {
+      try {
+        const response = await timedFetch("https://openrouter.ai/api/v1/chat/completions", {
+          method: "POST",
+          headers: { Authorization: "Bearer " + k, "Content-Type": "application/json" },
+          body: JSON.stringify({ model, messages: [{ role: "system", content: system }, { role: "user", content: user }], temperature: 0.7, max_tokens: 1800 }),
+        }, 30000);
+        if (!response.ok) { lastErr = "خطای OpenRouter/" + model + " (" + response.status + ")"; continue; }
+        const data = (await response.json()) as any;
+        const txt = String(data?.choices?.[0]?.message?.content || "");
+        if (txt) return txt;
+        lastErr = "پاسخ خالی از " + model;
+      } catch (eO) {
+        lastErr = String((eO as any)?.message || eO).slice(0, 100);
+      }
+    }
+    throw new Error(lastErr || "هیچ مدل OpenRouter پاسخ نداد");
   }
   const response = await timedFetch("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",

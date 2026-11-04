@@ -2532,13 +2532,20 @@ const SCHOOL_JS = String.raw`
       return '<button class="btn btn-ghost" style="width:100%;margin-top:10px;" onclick="goTab(' + Q + 'books' + Q + ')">↩️ بازگشت به کتاب‌خوانی</button>';
     }
 
+    function withTimeout(promise, ms, msg) {
+      return new Promise(function (resolve, reject) {
+        var t = setTimeout(function () { reject(new Error(msg)); }, ms);
+        promise.then(function (v) { clearTimeout(t); resolve(v); }, function (e) { clearTimeout(t); reject(e); });
+      });
+    }
+
     async function readQuizStart(pid) {
       var main = document.getElementById("mainView");
       if (!main) return;
-      main.innerHTML = '<div class="card" style="text-align:center;padding:30px;">⏳ هوش مصنوعی در حال طراحی سوال از متن خلاصه...</div>';
+      main.innerHTML = '<div class="card" style="text-align:center;padding:30px;">⏳ در حال آماده‌سازی آزمون... (معمولاً چند ثانیه)</div>';
       try {
-        var pp = await api("/api/ms/student/read/passage?id=" + pid);
-        var z = await api("/api/ms/student/read/start", { passageId: pid });
+        var pp = await withTimeout(api("/api/ms/student/read/passage?id=" + pid), 30000, "پاسخ سرور طول کشید");
+        var z = await withTimeout(api("/api/ms/student/read/start", { passageId: pid }), 80000, "ساخت سوال‌ها طول کشید");
         _readQuizState = { passageId: pid, passage: pp.passage, questions: z.questions || [], total: z.total };
         var sQ = _readQuizState;
         main.innerHTML =
@@ -2561,7 +2568,10 @@ const SCHOOL_JS = String.raw`
           '<button class="btn btn-emerald" style="width:100%;" onclick="readQuizSubmit()">📤 ثبت پاسخ‌ها</button>' +
           readBackBtn();
       } catch (e) {
-        main.innerHTML = '<div class="card">❌ ' + esc(e.message) + '</div>' + readBackBtn();
+        main.innerHTML = '<div class="card" style="text-align:center;padding:22px;">❌ ' + esc(e.message) +
+          '<div class="muted" style="font-size:11.5px;margin-top:6px;">ممکن است سرویس هوش مصنوعی لحظه‌ای شلوغ باشد.</div>' +
+          '<button class="btn btn-gold" style="margin-top:10px;" onclick="readQuizStart(' + pid + ')">🔄 تلاش مجدد</button>' +
+          '</div>' + readBackBtn();
       }
     }
 
@@ -2620,7 +2630,7 @@ const SCHOOL_JS = String.raw`
       var out = document.getElementById("aiBookOut");
       if (out) out.innerHTML = '<div class="muted" style="text-align:center;padding:12px;">⏳ هوش مصنوعی در حال انتخاب یک کتاب و نوشتن خلاصه...</div>';
       try {
-        var r = await api("/api/ms/student/read/ai-book", {});
+        var r = await withTimeout(api("/api/ms/student/read/ai-book", {}), 110000, "معرفی کتاب طول کشید");
         var b = r.book || {};
         if (out) {
           out.innerHTML =
@@ -2634,7 +2644,7 @@ const SCHOOL_JS = String.raw`
             '</div>';
         }
       } catch (e) {
-        if (out) out.innerHTML = '<div class="muted" style="text-align:center;padding:10px;">❌ ' + esc(e.message) + '</div>';
+        if (out) out.innerHTML = '<div class="muted" style="text-align:center;padding:10px;">❌ ' + esc(e.message) + '<button class="btn btn-gold btn-sm" style="margin-top:8px;width:100%;" onclick="readAiBook()">🔄 تلاش مجدد</button></div>';
       }
     }
 

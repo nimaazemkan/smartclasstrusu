@@ -306,6 +306,7 @@ export async function ensureSchoolTables(db: D1Database): Promise<void> {
   await db.prepare("CREATE TABLE IF NOT EXISTS ms_read_quizzes (id INTEGER PRIMARY KEY AUTOINCREMENT, school_id INTEGER, class_id INTEGER DEFAULT 0, passage_id INTEGER, student_id INTEGER, questions TEXT DEFAULT '', answers TEXT DEFAULT '', chosen TEXT DEFAULT '', score REAL DEFAULT 0, total INTEGER DEFAULT 0, created_at TEXT DEFAULT '', finished_at TEXT DEFAULT '')").run();
   await db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS ux_ms_read_quiz ON ms_read_quizzes (passage_id, student_id)").run();
   try { await db.prepare("ALTER TABLE ms_read_passages ADD COLUMN translator TEXT DEFAULT ''").run(); } catch (e) {}
+  try { await db.prepare("ALTER TABLE ms_read_passages ADD COLUMN questions_def TEXT DEFAULT ''").run(); } catch (e) {}
   await db
     .prepare(`CREATE TABLE IF NOT EXISTS ms_tg_msgmap (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -2888,6 +2889,12 @@ export async function handleMultiSchoolRequest(
     const x: any = await db.prepare("SELECT * FROM ms_read_passages WHERE id = ? AND school_id = ?").bind(pid, schoolId).first();
     if (!x) return jsonOut({ error: "خلاصه یافت نشد." }, 404);
     const passageText = String(x.passage || "").slice(0, 3000);
+    let questions: any[] = [];
+    try {
+      const cached = JSON.parse(String(x.questions_def || "[]"));
+      if (Array.isArray(cached)) questions = cached.filter((q: any) => q && q.text && Array.isArray(q.options) && q.options.length === 4);
+    } catch (eC) { questions = []; }
+    if (questions.length < 2) {
     const sysP = "تو یک طراح سوال دقیق درک مطلب برای دانش‌آموزان ابتدایی ایران هستی. سوال‌ها فقط و فقط از متن داده‌شده ساخته می‌شوند، نه از دانش بیرونی. فقط JSON خروجی بده.";
     const userP = "از متن خلاصه‌ی کتاب زیر دقیقاً 4 سوال چهارگزینه‌ای فارسی بساز. خروجی فقط JSON با این ساختار: {\"questions\":[{\"text\":\"...\",\"options\":[...4 گزینه...],\"answer\":0}]}. فیلد answer ایندکس عددی گزینه‌ی درست (0 تا 3). چهار گزینه هم‌اندازه و معقول باشد؛ سوال‌ها کاملاً به متن وابسته باشند. متن:" + String.fromCharCode(10, 10) + passageText;
     let raw = "";
@@ -2896,7 +2903,6 @@ export async function handleMultiSchoolRequest(
     } catch (eA) {
       return jsonOut({ error: "خطا در ساخت سوال‌ها: " + String((eA as any)?.message || eA).slice(0, 140) }, 502);
     }
-    let questions: any[] = [];
     try {
       const i1 = raw.indexOf("{");
       const i2 = raw.lastIndexOf("}");
@@ -2912,6 +2918,8 @@ export async function handleMultiSchoolRequest(
       return jsonOut({ error: "پاسخ هوش مصنوعی قابل تفسیر نبود؛ دوباره تلاش کنید." }, 502);
     }
     if (questions.length < 2) return jsonOut({ error: "هوش مصنوعی سوال کافی نساخت؛ دوباره تلاش کنید." }, 502);
+      await db.prepare("UPDATE ms_read_passages SET questions_def = ? WHERE id = ?").bind(JSON.stringify(questions), pid).run();
+    }
     const total = questions.length;
     await db
       .prepare("INSERT INTO ms_read_quizzes (school_id, class_id, passage_id, student_id, questions, answers, chosen, score, total, created_at) VALUES (?, ?, ?, ?, ?, '[]', '[]', 0, ?, ?) ON CONFLICT(passage_id, student_id) DO UPDATE SET questions = excluded.questions, answers = excluded.answers, chosen = '[]', score = 0, total = excluded.total, created_at = excluded.created_at, finished_at = ''")
@@ -2975,7 +2983,7 @@ export async function handleMultiSchoolRequest(
   // ==================== ✨ کتاب پیشنهادی هوش مصنوعی ====================
   if (path === "/api/ms/student/read/ai-book" && request.method === "POST" && (isStudent || isTeacher || isAdmin)) {
     const sysP = "تو کارشناس کتاب‌خوانی مدارس ایران هستی. فقط JSON خروجی بده، بدون هیچ متن اضافه.";
-    const userP = "یک کتاب واقعی و مناسب دانش‌آموزان دبستان ایران (پایه 4 تا 6) انتخاب کن و معرفی کن. شرایط: نام دقیق و واقعی کتاب، نویسنده‌ی واقعی، و اگر اثر ترجمه است نام مترجم شناخته‌شده‌ی فارسی را بنویس (اگر اثر ایرانی است مترجم را - بگذار). سپس خلاصه‌ای جذاب و روان بین 600 تا 1100 حرف بنویس که دانش‌آموز با خواندنش فضای داستان و پیام کتاب را بفهمد؛ آخر داستان را لو نده. خروجی فقط JSON با این ساختار: {\"title\":\"...\",\"author\":\"...\",\"translator\":\"...\",\"summary\":\"...\"}";
+    const userP = "یک کتاب واقعی و مناسب دانش‌آموزان دبستان ایران (پایه 4 تا 6) انتخاب کن و معرفی کن. شرایط: نام دقیق و واقعی کتاب، نویسنده‌ی واقعی، و اگر اثر ترجمه است نام مترجم شناخته‌شده‌ی فارسی را بنویس (اگر اثر ایرانی است مترجم را - بگذار). سپس خلاصه‌ای جذاب و روان بین 600 تا 1100 حرف بنویس که دانش‌آموز با خواندنش فضای داستان و پیام کتاب را بفهمد؛ آخر داستان را لو نده. خروجی فقط JSON با این ساختار: {\"title\":\"...\",\"author\":\"...\",\"translator\":\"...\",\"summary\":\"...\",\"questions\":[{\"text\":\"...\",\"options\":[...4 گزینه...],\"answer\":0}]}}. فیلد questions دقیقاً 4 سوال چهارگزینه‌ای از همان خلاصه باشد (answer ایندکس گزینه‌ی درست از 0 تا 3).";
     let raw = "";
     try {
       raw = await msAiCall(deps as any, db, "auto", sysP, userP);
@@ -2997,6 +3005,18 @@ export async function handleMultiSchoolRequest(
     if (title.length < 2 || author.length < 2 || summary.length < 200) {
       return jsonOut({ error: "هوش مصنوعی معرفی کاملی برنگرداند؛ دوباره تلاش کنید." }, 502);
     }
+    let aiQuestions: any[] = [];
+    try {
+      const rawQs = Array.isArray(book?.questions) ? book.questions : [];
+      aiQuestions = rawQs.map((q: any) => {
+        const opts = (Array.isArray(q.options) ? q.options : []).map((o: any) => String(o ?? "").trim()).slice(0, 4);
+        while (opts.length < 4) opts.push("");
+        const ai2 = Number(q.answer);
+        const answer = isFinite(ai2) && ai2 >= 0 && ai2 <= 3 && opts[ai2] ? String(ai2) : "0";
+        return { text: String(q.text || "").trim(), options: opts, answer };
+      }).filter((q: any) => q.text.length >= 3 && q.options.length === 4);
+    } catch (eQ) { aiQuestions = []; }
+    const qDef = aiQuestions.length >= 2 ? JSON.stringify(aiQuestions) : "";
     const dup: any = await db
       .prepare("SELECT id, passage FROM ms_read_passages WHERE school_id = ? AND title = ? AND added_by = '🤖 هوش مصنوعی'")
       .bind(schoolId, title)
@@ -3006,8 +3026,8 @@ export async function handleMultiSchoolRequest(
       return jsonOut({ ok: true, id: pid, isNew: false, book: { id: pid, title, author, translator, passage: String(dup?.passage || summary), addedBy: "🤖 هوش مصنوعی" } });
     }
     const r = await db
-      .prepare("INSERT INTO ms_read_passages (school_id, class_id, title, author, translator, passage, added_by, created_at) VALUES (?, 0, ?, ?, ?, ?, '🤖 هوش مصنوعی', ?)")
-      .bind(schoolId, title, author, translator, summary.slice(0, 3000), nowIso())
+      .prepare("INSERT INTO ms_read_passages (school_id, class_id, title, author, translator, passage, questions_def, added_by, created_at) VALUES (?, 0, ?, ?, ?, ?, ?, '🤖 هوش مصنوعی', ?)")
+      .bind(schoolId, title, author, translator, summary.slice(0, 3000), qDef, nowIso())
       .run();
     pid = Number((r as any)?.meta?.last_row_id || 0);
     return jsonOut({ ok: true, id: pid, isNew: true, book: { id: pid, title, author, translator, passage: summary, addedBy: "🤖 هوش مصنوعی" } });

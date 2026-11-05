@@ -89,6 +89,10 @@ interface LiveClassroomMemory {
   chat: LiveChatMsg[];
   signals: RtcSignalMsg[];
   poll: LivePollState | null;
+  relay: { img: string; ts: number; seq: number };
+  relayAudio: { seq: number; data: string }[];
+  relayAudioSeq: number;
+  relayNeededAt: number;
 }
 
 function createFreshPage(pageIndex: number): LiveBoardPage {
@@ -124,6 +128,10 @@ function initMemory(): LiveClassroomMemory {
     chat: [],
     signals: [],
     poll: null,
+    relay: { img: "", ts: 0, seq: 0 },
+    relayAudio: [],
+    relayAudioSeq: 0,
+    relayNeededAt: 0,
   };
 }
 
@@ -416,6 +424,10 @@ export async function handleLiveClassRequest(
     room.slides.clear();
     room.participants.clear();
     room.attendanceMarked.clear();
+    room.relay = { img: "", ts: 0, seq: 0 };
+    room.relayAudio = [];
+    room.relayAudioSeq = 0;
+    room.relayNeededAt = 0;
     room.chat = [
       {
         id: ++room.chatSeq,
@@ -427,6 +439,10 @@ export async function handleLiveClassRequest(
     ];
     room.signals = [];
     room.poll = null;
+    room.relay = { img: "", ts: 0, seq: 0 };
+    room.relayAudio = [];
+    room.relayAudioSeq = 0;
+    room.relayNeededAt = 0;
 
     room.participants.set("teacher", {
       key: "teacher",
@@ -461,6 +477,41 @@ export async function handleLiveClassRequest(
   }
 
   // ۴. همگام‌سازی لحظه‌ای وضعیت کلاس، تخته، چت، حاضرین و سیگنالینگ WebRTC
+  if (path === "/api/app/live/relay" && request.method === "POST") {
+    if (!isTeacher) return jsonOut({ error: "فقط معلم" }, 403);
+    const body: any = await request.json().catch(() => ({}));
+    const img = String(body.img || "");
+    if (!img || img.length > 200000) return jsonOut({ error: "فریم نامعتبر" }, 400);
+    room.relay = { img, ts: Date.now(), seq: room.relay.seq + 1 };
+    return jsonOut({ ok: true, seq: room.relay.seq });
+  }
+  if (path === "/api/app/live/relay" && request.method === "GET") {
+    const since = Number((new URL(request.url)).searchParams.get("since") || 0);
+    return jsonOut({
+      img: room.relay.seq > since ? room.relay.img : "",
+      seq: room.relay.seq,
+      ts: room.relay.ts,
+      needed: Date.now() - room.relayNeededAt < 25000,
+    });
+  }
+  if (path === "/api/app/live/relay-audio" && request.method === "POST") {
+    if (!isTeacher) return jsonOut({ error: "فقط معلم" }, 403);
+    const body: any = await request.json().catch(() => ({}));
+    const data = String(body.data || "");
+    if (!data || data.length > 120000) return jsonOut({ error: "صدا نامعتبر" }, 400);
+    room.relayAudioSeq += 1;
+    room.relayAudio.push({ seq: room.relayAudioSeq, data });
+    if (room.relayAudio.length > 30) room.relayAudio = room.relayAudio.slice(-30);
+    return jsonOut({ ok: true, seq: room.relayAudioSeq });
+  }
+  if (path === "/api/app/live/relay-audio" && request.method === "GET") {
+    const since = Number((new URL(request.url)).searchParams.get("since") || 0);
+    return jsonOut({
+      chunks: room.relayAudio.filter((c) => c.seq > since),
+      needed: Date.now() - room.relayNeededAt < 25000,
+    });
+  }
+
   if (path === "/api/app/live/sync") {
     pruneStale(room);
 
@@ -493,6 +544,8 @@ export async function handleLiveClassRequest(
       me.lastSeen = Date.now();
       me.name = myName;
     }
+
+    if (body.wantRelay) room.relayNeededAt = Date.now();
 
     if (typeof body.mediaActive === "string") {
       if (isTeacher || me.canSpeak || body.mediaActive === "none") {
@@ -577,6 +630,7 @@ export async function handleLiveClassRequest(
       strokes: deltaStrokes,
       latestStrokeSeq: room.strokeSeq,
       laser: laserActive ? { x: room.laser.x, y: room.laser.y, active: true } : { active: false },
+      relayNeeded: Date.now() - room.relayNeededAt < 25000,
       participants: participantsList,
       chats: newChats,
       signals: mySignals,

@@ -242,26 +242,22 @@ export const LIVE_CLASS_JS = String.raw`
 
     var LIVE_ICE_CONFIG = {
       iceServers: [
+        { urls: "stun:stun.cloudflare.com:3478" },
+        { urls: "stun:global.stun.twilio.com:3478" },
         { urls: "stun:stun.l.google.com:19302" },
-        { urls: "stun:stun1.l.google.com:19302" },
-        { urls: "stun:openrelay.metered.ca:80" },
-        {
-          urls: "turn:openrelay.metered.ca:80",
-          username: "openrelayproject",
-          credential: "openrelayproject"
-        },
-        {
-          urls: "turn:openrelay.metered.ca:443?transport=tcp",
-          username: "openrelayproject",
-          credential: "openrelayproject"
-        },
-        {
-          urls: "turns:openrelay.metered.ca:443?transport=tcp",
-          username: "openrelayproject",
-          credential: "openrelayproject"
-        }
-      ]
+        { urls: "stun:stun1.l.google.com:19302" }
+      ],
+      iceCandidatePoolSize: 4
     };
+    liveState.relayImg = "";
+    liveState.relayImgSeq = 0;
+    liveState.relayAudioSeq = 0;
+    liveState.relayWant = false;
+    liveState.relayWaitSince = {};
+    liveState.relayPollTimer = null;
+    liveState.relayAudioNextAt = 0;
+    liveState.relayTeacherTimer = null;
+    liveState.relayAudioCtx = null;
 
     function stopLivePollingOnly() {
       if (liveState.timer) {
@@ -379,7 +375,8 @@ export const LIVE_CLASS_JS = String.raw`
           sinceStrokeSeq: liveState.sinceStrokeSeq,
           sinceChatId: liveState.sinceChatId,
           sinceSignalId: liveState.sinceSignalId,
-          mediaActive: liveState.localMediaKind
+          mediaActive: liveState.localMediaKind,
+          wantRelay: liveState.relayWant ? 1 : 0
         };
         var d = await liveApi("/api/app/live/sync", reqBody);
 
@@ -482,6 +479,12 @@ export const LIVE_CLASS_JS = String.raw`
         }
         if (!liveState.drawing) {
           redrawWhiteboardOverlay();
+        }
+
+        if (liveIsTeacher()) {
+          updateRelayTeacher(Boolean(d.relayNeeded));
+        } else {
+          updateRelayStudent();
         }
 
         // پردازش پیام‌های سیگنالینگ WebRTC و حفظ اتصال خودکار
@@ -1360,6 +1363,171 @@ export const LIVE_CLASS_JS = String.raw`
       }
     }
 
+    // ============ 📡 پخش اضطراری از طریق سرور (وقتی P2P وصل نمی‌شود) ============
+    function relayEnsureHiddenVideo() {
+      if (!liveState._relayVideo) {
+        var v = document.createElement("video");
+        v.muted = true;
+        v.playsInline = true;
+        v.setAttribute("playsinline", "");
+        v.style.position = "absolute";
+        v.style.left = "-9999px";
+        v.style.width = "2px";
+        v.style.height = "2px";
+        try { document.body.appendChild(v); } catch (e) {}
+        liveState._relayVideo = v;
+      }
+      if (liveState.localStream && liveState._relayVideo.srcObject !== liveState.localStream) {
+        try { liveState._relayVideo.srcObject = liveState.localStream; } catch (e) {}
+        try { var pr = liveState._relayVideo.play(); if (pr && pr.catch) pr.catch(function () {}); } catch (e) {}
+      }
+      return liveState._relayVideo;
+    }
+
+    function relayCaptureTick() {
+      try {
+        var src = relayEnsureHiddenVideo();
+        if (!src || !src.videoWidth) return;
+        if (!liveState._relayCanvas) liveState._relayCanvas = document.createElement("canvas");
+        var w = 360;
+        var h = Math.round((src.videoHeight / src.videoWidth) * w) || 202;
+        liveState._relayCanvas.width = w;
+        liveState._relayCanvas.height = h;
+        liveState._relayCanvas.getContext("2d").drawImage(src, 0, 0, w, h);
+        var data = liveState._relayCanvas.toDataURL("image/jpeg", 0.5);
+        liveApi("/api/app/live/relay", { img: data }).catch(function () {});
+      } catch (e) {}
+    }
+
+    function relayAudioStart() {
+      try {
+        if (!liveState.localStream || liveState._relayAudioCtx) return;
+        var AC = window.AudioContext || window.webkitAudioContext;
+        if (!AC) return;
+        var ctx = new AC();
+        liveState._relayAudioCtx = ctx;
+        var srcNode = ctx.createMediaStreamSource(liveState.localStream);
+        var proc = ctx.createScriptProcessor(4096, 1, 1);
+        var pending = [];
+        var pendingLen = 0;
+        var lastSend = 0;
+        proc.onaudioprocess = function (ev) {
+          try {
+            var input = ev.inputBuffer.getChannelData(0);
+            var step = Math.max(1, Math.floor(input.length / 683));
+            for (var i = 0; i < input.length; i += step) {
+              pending.push(input[i]);
+              pendingLen++;
+            }
+            var now = Date.now();
+            if (pendingLen >= 4800 && now - lastSend > 700) {
+              lastSend = now;
+              var take = Math.min(pendingLen, 8000);
+              var out = new Int16Array(take);
+              for (var j = 0; j < take; j++) {
+                var v = Math.max(-1, Math.min(1, pending[j]));
+                out[j] = v < 0 ? v * 32768 : v * 32767;
+              }
+              pending = pending.slice(take);
+              pendingLen = pending.length;
+              var u8 = new Uint8Array(out.buffer);
+              var sBin = "";
+              for (var k = 0; k < u8.length; k++) sBin += String.fromCharCode(u8[k]);
+              liveApi("/api/app/live/relay-audio", { data: btoa(sBin) }).catch(function () {});
+            }
+            if (pendingLen > 24000) { pending = pending.slice(-8000); pendingLen = pending.length; }
+          } catch (e) {}
+        };
+        srcNode.connect(proc);
+        proc.connect(ctx.destination);
+        liveState._relayAudioProc = proc;
+      } catch (e) {}
+    }
+
+    function relayAudioStop() {
+      try { if (liveState._relayAudioProc) liveState._relayAudioProc.disconnect(); } catch (e) {}
+      liveState._relayAudioProc = null;
+    }
+
+    function updateRelayTeacher(needed) {
+      try {
+        if (needed && liveState.localStream && liveState.localMediaKind !== "none") {
+          if (!liveState.relayTeacherTimer) {
+            liveState.relayTeacherTimer = setInterval(relayCaptureTick, 650);
+            relayAudioStart();
+            showToast("📡 برای بینندگانی که اتصال مستقیم ندارند، پخش اضطراری از طریق سرور فعال شد.");
+          }
+        } else if (!needed && liveState.relayTeacherTimer) {
+          clearInterval(liveState.relayTeacherTimer);
+          liveState.relayTeacherTimer = null;
+          relayAudioStop();
+        }
+      } catch (e) {}
+    }
+
+    function relayPlayAudio(b64, seq) {
+      try {
+        if (seq <= liveState.relayAudioSeq) return;
+        liveState.relayAudioSeq = seq;
+        var AC = window.AudioContext || window.webkitAudioContext;
+        if (!AC) return;
+        if (!liveState._relayAudioCtx) liveState._relayAudioCtx = new AC();
+        var ctx = liveState._relayAudioCtx;
+        if (ctx.state === "suspended") { var rp = ctx.resume(); if (rp && rp.catch) rp.catch(function () {}); }
+        var bin = atob(b64);
+        var bytes = new Uint8Array(bin.length);
+        for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        var samples = new Int16Array(bytes.buffer);
+        if (!samples.length) return;
+        var buf = ctx.createBuffer(1, samples.length, 8000);
+        var ch = buf.getChannelData(0);
+        for (var j = 0; j < samples.length; j++) ch[j] = samples[j] / 32768;
+        var node = ctx.createBufferSource();
+        node.buffer = buf;
+        node.connect(ctx.destination);
+        var t = Math.max(ctx.currentTime + 0.05, liveState.relayAudioNextAt || 0);
+        node.start(t);
+        liveState.relayAudioNextAt = t + buf.duration;
+      } catch (e) {}
+    }
+
+    async function relayPollTick() {
+      try {
+        var d = await liveApi("/api/app/live/relay?since=" + liveState.relayImgSeq);
+        if (d && d.img) {
+          liveState.relayImgSeq = Number(d.seq || liveState.relayImgSeq);
+          liveState.relayImg = d.img;
+          refreshVideoTilesDom();
+        }
+        var a = await liveApi("/api/app/live/relay-audio?since=" + liveState.relayAudioSeq);
+        if (a && Array.isArray(a.chunks)) {
+          for (var i = 0; i < a.chunks.length; i++) relayPlayAudio(a.chunks[i].data, a.chunks[i].seq);
+        }
+      } catch (e) {}
+    }
+
+    function updateRelayStudent() {
+      var need = false;
+      (liveState.participants || []).forEach(function (p) {
+        if (!p || !p.key || p.key === liveState.myKey) return;
+        if (!p.mediaActive || p.mediaActive === "none") return;
+        if (liveState.remoteStreams[p.key]) {
+          delete liveState.relayWaitSince[p.key];
+          return;
+        }
+        if (!liveState.relayWaitSince[p.key]) liveState.relayWaitSince[p.key] = Date.now();
+        if (Date.now() - liveState.relayWaitSince[p.key] > 7000) need = true;
+      });
+      liveState.relayWant = need;
+      if (need && !liveState.relayPollTimer) {
+        liveState.relayPollTimer = setInterval(relayPollTick, 950);
+        relayPollTick();
+      } else if (!need && liveState.relayPollTimer && !liveState.relayImg) {
+        clearInterval(liveState.relayPollTimer);
+        liveState.relayPollTimer = null;
+      }
+    }
+
     function retryLivePeer(senderKey) {
       if (!senderKey) return;
       try { if (liveState.inPeers[senderKey]) liveState.inPeers[senderKey].close(); } catch (e) {}
@@ -1574,7 +1742,7 @@ export const LIVE_CLASS_JS = String.raw`
 
       // نمای پایدار کاشی‌ها + پخش تضمینی (رفع صفحه سیاه در اندروید WebView)
       if (!grid.dataset) { try { grid.dataset = {}; } catch (e) {} }
-      var sigKeys = tiles.map(function(t) { return t.key + ":" + t.kind; }).join("|");
+      var sigKeys = tiles.map(function(t) { return t.key + ":" + t.kind + (t.kind === "pending" && liveState.relayImg && t.role === "teacher" ? ":r" : ""); }).join("|");
       if (grid.dataset.tileSig !== sigKeys) {
         grid.dataset.tileSig = sigKeys;
         grid.innerHTML = tiles.map(function(t) {
@@ -1582,7 +1750,9 @@ export const LIVE_CLASS_JS = String.raw`
           var audioPlaceholder = t.kind === "audio"
             ? '<div style="text-align:center;padding:24px;"><div style="font-size:34px;">🎙🔊</div><div style="font-weight:800;margin-top:6px;color:#6EE7B7;">پخش زنده صوتی فعال</div></div>'
             : t.kind === "pending"
-            ? '<div style="text-align:center;padding:22px;"><div style="font-size:32px;">📡</div><div style="font-weight:800;margin-top:6px;color:#93C5FD;">در حال اتصال به پخش زنده...</div><div class="muted" style="font-size:11px;margin-top:4px;">اگر تصویر نمایش داده نشد، دکمه زیر را بزنید</div><button class="btn btn-gold btn-sm" style="margin-top:8px;" onclick="retryLivePeer(\' + String(t.srcKey || "") + \')">🔄 تلاش مجدد اتصال</button></div>'
+            ? (liveState.relayImg && t.role === "teacher"
+              ? '<img id="vimg_' + t.key + '" src="' + liveState.relayImg + '" style="width:100%;height:100%;object-fit:cover;position:absolute;left:0;top:0;" alt="پخش زنده" /><div class="live-video-badge" style="right:auto;left:8px;background:rgba(245,158,11,0.92);color:#1E293B;">📡 پخش اضطراری از طریق سرور</div>'
+              : '<div style="text-align:center;padding:22px;"><div style="font-size:32px;">📡</div><div style="font-weight:800;margin-top:6px;color:#93C5FD;">در حال اتصال به پخش زنده...</div><div class="muted" style="font-size:11px;margin-top:4px;">اگر تصویر نمایش داده نشد، دکمه زیر را بزنید</div><button class="btn btn-gold btn-sm" style="margin-top:8px;" onclick="retryLivePeer(\' + String(t.srcKey || "") + \')">🔄 تلاش مجدد اتصال</button></div>')
             : '';
           return '<div class="live-video-tile" style="position:relative;">' +
             audioPlaceholder +
@@ -1602,6 +1772,10 @@ export const LIVE_CLASS_JS = String.raw`
         try { if (vEl.muted !== wantMuted) vEl.muted = wantMuted; } catch (e) {}
         if (t.stream && vEl.srcObject !== t.stream) {
           try { vEl.srcObject = t.stream; } catch (e) {}
+        }
+        var rImg = document.getElementById("vimg_" + t.key);
+        if (rImg && liveState.relayImg && rImg.getAttribute("src") !== liveState.relayImg) {
+          try { rImg.src = liveState.relayImg; } catch (e) {}
         }
         var playPromise = null;
         try { if (vEl.paused && vEl.play) playPromise = vEl.play(); } catch (e) {}

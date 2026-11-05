@@ -1539,7 +1539,18 @@ export const LIVE_CLASS_JS = String.raw`
         imgLen: String(liveState.relayImg || "").length,
         imgSeq: Number(liveState.relayImgSeq || 0),
         relayVideoReady: !!(liveState._relayVideo && liveState._relayVideo.videoWidth),
-        waitKeys: Object.keys(liveState.relayWaitSince || {})
+        waitKeys: Object.keys(liveState.relayWaitSince || {}),
+        dom: (function () {
+          var img = document.querySelector('img[id^="vimg_"]');
+          var grid = document.getElementById("liveVideoGrid");
+          return {
+            imgExists: !!img,
+            imgSrcHead: img ? String(img.getAttribute("src") || "").slice(0, 24) : "",
+            gridExists: !!grid,
+            gridSig: grid && grid.dataset ? String(grid.dataset.tileSig || "").slice(0, 80) : "no-dataset",
+            imgCount: document.querySelectorAll("img[id^=vimg_]").length
+          };
+        })()
       };
     };
 

@@ -1755,7 +1755,7 @@ export const LIVE_CLASS_JS = String.raw`
         if (!p || !p.key || p.key === liveState.myKey) return;
         if (!p.mediaActive || p.mediaActive === "none") return;
         if (liveState.remoteStreams[p.key]) return;
-        tiles.push({ key: "pend_" + p.key, label: (p.role === "teacher" ? "👨‍🏫 استاد " : "🗣 ") + (p.name || ""), stream: null, muted: true, kind: "pending", srcKey: p.key });
+        tiles.push({ key: "pend_" + p.key, label: (p.role === "teacher" ? "👨‍🏫 استاد " : "🗣 ") + (p.name || ""), stream: null, muted: true, kind: "pending", srcKey: p.key, role: p.role });
       });
 
       grid.classList.toggle("has-two", tiles.length >= 2);

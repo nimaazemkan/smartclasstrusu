@@ -466,7 +466,7 @@ export const LIVE_CLASS_JS = String.raw`
           liveState.sinceSignalId = d.latestSignalId;
         }
 
-        if (forceDomRebuild || roomChanged || !document.getElementById("wbBgCanvas") || prevCanDraw !== liveState.myPerms.canDraw || prevCanSpeak !== liveState.myPerms.canSpeak || prevEngine !== liveState.videoEngine) {
+        if (forceDomRebuild || roomChanged || !document.getElementById("wbBgCanvas") || !document.getElementById("liveVideoTiles") || prevCanDraw !== liveState.myPerms.canDraw || prevCanSpeak !== liveState.myPerms.canSpeak || prevEngine !== liveState.videoEngine) {
           buildActiveClassroomDom();
           needBoardRedraw = true;
           chatUpdated = true;
@@ -497,7 +497,7 @@ export const LIVE_CLASS_JS = String.raw`
           await ensureOutboundConnectionsToListeners();
         }
       } catch (e) {
-        // در صورت قطع لحظه‌ای، در تیک بعدی ادامه می‌دهیم
+        liveState._lastPollError = String((e && e.message) || e).slice(0, 200);
       }
       liveState.syncBusy = false;
     }
@@ -1540,14 +1540,16 @@ export const LIVE_CLASS_JS = String.raw`
         imgSeq: Number(liveState.relayImgSeq || 0),
         relayVideoReady: !!(liveState._relayVideo && liveState._relayVideo.videoWidth),
         waitKeys: Object.keys(liveState.relayWaitSince || {}),
+        lastErr: String(liveState._lastPollError || ""),
         dom: (function () {
           var img = document.querySelector('img[id^="vimg_"]');
-          var grid = document.getElementById("liveVideoGrid");
+          var grid = document.getElementById("liveVideoTiles");
           return {
             imgExists: !!img,
             imgSrcHead: img ? String(img.getAttribute("src") || "").slice(0, 24) : "",
             gridExists: !!grid,
-            gridSig: grid && grid.dataset ? String(grid.dataset.tileSig || "").slice(0, 80) : "no-dataset",
+            wbCanvas: !!document.getElementById("wbBgCanvas"),
+            gridSig: grid && grid.dataset ? String(grid.dataset.tileSig || "").slice(0, 60) : "no-dataset",
             imgCount: document.querySelectorAll("img[id^=vimg_]").length
           };
         })()

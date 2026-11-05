@@ -1528,6 +1528,21 @@ export const LIVE_CLASS_JS = String.raw`
       }
     }
 
+    window._liveRelayDbg = function () {
+      return {
+        isTeacher: liveIsTeacher(),
+        teacherTimer: !!liveState.relayTeacherTimer,
+        pollTimer: !!liveState.relayPollTimer,
+        hasStream: !!liveState.localStream,
+        kind: String(liveState.localMediaKind || ""),
+        want: !!liveState.relayWant,
+        imgLen: String(liveState.relayImg || "").length,
+        imgSeq: Number(liveState.relayImgSeq || 0),
+        relayVideoReady: !!(liveState._relayVideo && liveState._relayVideo.videoWidth),
+        waitKeys: Object.keys(liveState.relayWaitSince || {})
+      };
+    };
+
     function retryLivePeer(senderKey) {
       if (!senderKey) return;
       try { if (liveState.inPeers[senderKey]) liveState.inPeers[senderKey].close(); } catch (e) {}

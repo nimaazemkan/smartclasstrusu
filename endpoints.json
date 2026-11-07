@@ -1,7 +1,8 @@
 {
   "updated": "2026-11-07",
-  "note": "ترتیب آدرس‌ها = اولویت اتصال اپ اندروید",
+  "note": "ترتیب آدرس‌ها = اولویت اتصال اپ اندروید — دامنه اختصاصی اول",
   "endpoints": [
+    "https://www.azmakan.qd.je/school",
     "https://smartclasstrusu.onrender.com/school"
   ]
 }

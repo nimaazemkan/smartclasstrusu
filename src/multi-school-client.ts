@@ -4612,7 +4612,7 @@ export function buildSchoolHtml(): string {
     <div class="container" id="mainView"></div>
     <nav class="bottom-nav" id="bottomNav"><div class="bottom-nav-inner"></div></nav>
   </div>
-  <footer style="text-align:center;padding:10px 14px 14px;font-size:11px;color:#94A3B8;">© سازنده: <b>نیما آزمکان</b> <span style="opacity:.6;">| نسخه‌ی ۳٫۳٫۴ب</span> — کلیه حقوق مادی و معنوی این سامانه (نرم‌افزار، طراحی، محتوا و برند) متعلق به ایشان است.</footer>
+  <footer style="text-align:center;padding:10px 14px 14px;font-size:11px;color:#94A3B8;"><a href="/privacy" style="color:#7DD3FC;text-decoration:none;font-size:10.5px;">🛡 حریم خصوصی</a> &nbsp;•&nbsp; © سازنده: <b>نیما آزمکان</b> <span style="opacity:.6;">| نسخه‌ی ۳٫۳٫۴ب</span> — کلیه حقوق مادی و معنوی این سامانه (نرم‌افزار، طراحی، محتوا و برند) متعلق به ایشان است.</footer>
   <div id="toast"></div>
   <script>
 ${SCHOOL_JS}

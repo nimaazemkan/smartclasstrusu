@@ -253,8 +253,10 @@ export function getTursoD1FromEnv(envObj: Record<string, string | undefined> = p
         try {
           client = createNodeClient({
             url: rp,
-            syncUrl: String(cfg.url).replace(/^https:\/\//i, "libsql://").replace(/^http:\/\//i, "libsql://"),
+            syncUrl: cfg.url,
             authToken: cfg.authToken || undefined,
+            readYourWrites: true,
+            syncInterval: 0,
           } as any);
           _replicaInfo = { active: true, detail: rp };
           break;
@@ -292,31 +294,57 @@ function withResultCache(db: D1Database): D1Database {
     args,
     bind(...vs: any[]) { return wrap(st.bind(...vs), sql, vs); },
     async first(col?: string) {
-      if (!cacheable(sql)) return st.first(col);
-      const k = keyOf(sql, args);
-      const hit = cache.get(k);
-      if (fresh(hit)) return hit!.v;
-      const v = await st.first(col);
-      if (cache.size > 800) cache.clear();
-      cache.set(k, { t: Date.now(), v });
-      return v;
+      try {
+        if (!cacheable(sql)) return await st.first(col);
+        const k = keyOf(sql, args);
+        const hit = cache.get(k);
+        if (fresh(hit)) return hit!.v;
+        const v = await st.first(col);
+        if (cache.size > 800) cache.clear();
+        cache.set(k, { t: Date.now(), v });
+        return v;
+      } catch (e) {
+        if (isReplErr(e) && !(process as any).env.TURSO_NO_REPLICA) return retryDirect(sql, args, "first", col);
+        throw e;
+      }
     },
     async all() {
-      if (!cacheable(sql)) return st.all();
-      const k = keyOf(sql, args);
-      const hit = cache.get(k);
-      if (fresh(hit)) return hit!.v;
-      const v = await st.all();
-      if (cache.size > 800) cache.clear();
-      cache.set(k, { t: Date.now(), v });
-      return v;
+      try {
+        if (!cacheable(sql)) return await st.all();
+        const k = keyOf(sql, args);
+        const hit = cache.get(k);
+        if (fresh(hit)) return hit!.v;
+        const v = await st.all();
+        if (cache.size > 800) cache.clear();
+        cache.set(k, { t: Date.now(), v });
+        return v;
+      } catch (e) {
+        if (isReplErr(e) && !(process as any).env.TURSO_NO_REPLICA) return retryDirect(sql, args, "all");
+        throw e;
+      }
     },
     async run() {
-      const v = await st.run();
-      cache.clear();
-      return v;
+      try {
+        const v = await st.run();
+        cache.clear();
+        return v;
+      } catch (e) {
+        if (isReplErr(e) && !(process as any).env.TURSO_NO_REPLICA) return retryDirect(sql, args, "run");
+        throw e;
+      }
     },
   });
+  const isReplErr = (e: any) => /invalid header bit|writedelegation|sync error|bootstrap|replicat/i.test(String((e && (e as any).message) || e));
+  async function retryDirect(sql: string, args: any[], method: string, col?: any): Promise<any> {
+    process.env.TURSO_NO_REPLICA = "1";
+    (cachedClient as any) = null;
+    cachedAdapter = null;
+    const db2 = getTursoD1FromEnv(process.env);
+    if (!db2) throw new Error("db unavailable");
+    const st2 = db2.prepare(sql);
+    const b2 = args && args.length ? st2.bind(...args) : st2;
+    return method === "first" ? (b2 as any).first(col) : method === "all" ? (b2 as any).all() : (b2 as any).run();
+  }
   return {
     prepare(sql: string) { return wrap(db.prepare(sql), sql, []); },
     batch(stmts: any[]) { cache.clear(); return db.batch(stmts); },

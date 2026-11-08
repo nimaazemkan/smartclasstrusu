@@ -294,7 +294,7 @@ const server = http.createServer(async (req, res) => {
             body: JSON.stringify({ model: "qwen/qwen3.8-27b", messages: [{ role: "user", content: "فقط عدد: 3+3 چند می شود؟" }], max_tokens: 8 }),
           });
           const jj: any = await rr.json().catch(() => ({}));
-          out.hdrsTest = { ms: Date.now() - th, status: rr.status, result: String(jj?.choices?.[0]?.message?.content || "").slice(0, 20) };
+          out.hdrsTest = { ms: Date.now() - th, status: rr.status, result: String(jj?.choices?.[0]?.message?.content || "").slice(0, 20), err: String(jj?.error || "").slice(0, 110) };
         } catch (eH: any) {
           out.hdrsTest = { ms: Date.now() - th, error: String((eH && eH.message) || eH).slice(0, 100) };
         }

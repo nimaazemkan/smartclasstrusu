@@ -1,6 +1,8 @@
 import { createClient, Client, InValue } from "@libsql/client/web";
 // نسخه‌ی Node برای replica محلی (نسخه‌ی web فقط HTTP است و file نمی‌سازد)
 import { createClient as createNodeClient } from "@libsql/client";
+import { readFileSync } from "fs";
+import { join as pJoin2 } from "path";
 
 export interface D1Meta {
   last_row_id: number;
@@ -42,10 +44,25 @@ function rowToObject(columns: string[], row: any): any {
   return out;
 }
 
+let _cfgFileCheckedAt = 0;
+function loadCfgFileLazy(): void {
+  try {
+    if (Date.now() - _cfgFileCheckedAt < 3000) return;
+    _cfgFileCheckedAt = Date.now();
+    if (process.env.TURSO_DATABASE_URL && process.env.TURSO_AUTH_TOKEN) return;
+    const raw = readFileSync(pJoin2(process.cwd(), "smartclass-config.json"), "utf8");
+    const c: any = JSON.parse(raw);
+    for (const k of ["TURSO_DATABASE_URL", "TURSO_AUTH_TOKEN", "GROQ_API_KEY"]) {
+      if (!process.env[k] && c && c[k]) process.env[k] = String(c[k]);
+    }
+  } catch {}
+}
+
 export function resolveTursoConfig(envObj: Record<string, string | undefined> = process.env): {
   url: string;
   authToken: string;
 } | null {
+  loadCfgFileLazy();
   // ۱. متغیرهای مستقیم استاندارد
   const directPairs: [string, string][] = [
     ["TURSO_DATABASE_URL", "TURSO_AUTH_TOKEN"],

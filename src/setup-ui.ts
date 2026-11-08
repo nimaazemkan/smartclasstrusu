@@ -24,9 +24,18 @@ export async function handleSetupRequest(
   // ۱. اجرای APIهای جادوگر راه‌اندازی و انتقال داده
   if (path === "/api/setup/action" && request.method === "POST") {
     let body: any = {};
-    try {
-      body = await request.json();
-    } catch {}
+    const ctReq = request.headers.get("content-type") || "";
+    const isFormReq = ctReq.includes("urlencoded") || ctReq.includes("multipart");
+    if (isFormReq) {
+      try {
+        const fd = await request.formData();
+        body = Object.fromEntries((fd as any).entries() || []);
+      } catch {}
+    } else {
+      try {
+        body = await request.json();
+      } catch {}
+    }
     if (body.password !== deps.panelPassword) {
       return Response.json({ ok: false, error: "رمز مدیریت اشتباه است." }, { status: 401 });
     }
@@ -166,10 +175,11 @@ export async function handleSetupRequest(
       }
       const cfg: any = { TURSO_DATABASE_URL: tursoUrl, TURSO_AUTH_TOKEN: tursoToken };
       if (groqIn.startsWith("gsk_")) cfg.GROQ_API_KEY = groqIn;
+      let saveNote = "";
       try {
         fs.writeFileSync(nodePath.join(process.cwd(), "smartclass-config.json"), JSON.stringify(cfg, null, 2));
       } catch (e: any) {
-        return Response.json({ ok: false, error: "ذخیره پیکربندی ممکن نشد: " + (e?.message || "") }, { status: 500 });
+        saveNote = " (ذخیره فایل ممکن نشد؛ در حافظه فعال شد)";
       }
       process.env.TURSO_DATABASE_URL = tursoUrl;
       process.env.TURSO_AUTH_TOKEN = tursoToken;
@@ -180,9 +190,15 @@ export async function handleSetupRequest(
         const r: any = db2 ? await db2.prepare("SELECT COUNT(*) as c FROM students WHERE name != ''").first() : null;
         studentCount2 = r?.c || 0;
       } catch {}
+      if (isFormReq) {
+        return new Response(
+          "<!DOCTYPE html><html lang='fa' dir='rtl'><meta charset='utf-8'><meta name='viewport' content='width=device-width'><body style='background:#0F172A;color:#fff;font-family:Tahoma;text-align:center;padding:40px'><h2>\u2705 اتصال دیتابیس انجام شد!</h2><p>" + studentCount2 + " دانش‌آموز" + saveNote + "</p><a style='color:#38BDF8;font-size:18px;line-height:2' href='/school'>\u2190 ورود به پنل مدرسه</a></body></html>",
+          { status: 302, headers: { Location: origin + "/school", "Content-Type": "text/html; charset=utf-8" } }
+        );
+      }
       return Response.json({
         ok: true,
-        message: "\u2705 دیتابیس Turso با موفقیت متصل شد! (" + studentCount2 + " دانش‌آموز)\nهمه اطلاعات مدرسه در دسترس است.",
+        message: "\u2705 دیتابیس Turso با موفقیت متصل شد! (" + studentCount2 + " دانش‌آموز)" + saveNote + "\nهمه اطلاعات مدرسه در دسترس است.",
       });
     }
 
@@ -229,7 +245,7 @@ export async function handleSetupRequest(
   <div class="wrap">
     <div class="card">
       <h1>🏫 اتاق راه‌اندازی یک‌کلیکی «${deps.schoolName}»</h1>
-      <div style="color:#94A3B8;font-size:13px;">نسخه مستقل، رایگان و بدون فیلتر (پیکربندی v2) (Render / ابری + دیتابیس ۵ گیگابایتی Turso) — آماده برای چندین مدرسه</div>
+      <div style="color:#94A3B8;font-size:13px;">نسخه مستقل، رایگان و بدون فیلتر (پیکربندی v4) (Render / ابری + دیتابیس ۵ گیگابایتی Turso) — آماده برای چندین مدرسه</div>
     </div>
 
     <div class="card">
@@ -253,11 +269,14 @@ export async function handleSetupRequest(
     <div class="card" style="border-color:#10B981;">
       <div style="font-weight:bold;margin-bottom:8px;color:#34D399;">🔌 اتصال دیتابیس Turso — مستقیم از همین صفحه</div>
       <div style="color:#94A3B8;font-size:12.5px;margin-bottom:10px;">دو مقدار TURSO_DATABASE_URL و TURSO_AUTH_TOKEN را این‌جا وارد کنید تا بلافاصله وصل شود — نیازی به پنل میزبان نیست.</div>
-      <input id="tursoUrl" dir="ltr" oninput="maybeAutoDb()" placeholder="TURSO_DATABASE_URL (شروع با libsql://)" />
-      <input id="tursoToken" dir="ltr" oninput="maybeAutoDb()" placeholder="TURSO_AUTH_TOKEN (شروع با eyJ)" />
-      <input id="groqKey" dir="ltr" placeholder="GROQ_API_KEY (اختیاری — شروع با gsk_)" />
-      <input id="admPassDb" type="password" dir="ltr" oninput="maybeAutoDb()" placeholder="رمز مدیریت پنل (PANEL_PASSWORD)" />
-      <button class="btn-green" onclick="connectDb()">💾 ذخیره و اتصال فوری</button>
+      <form method="POST" action="/api/setup/action" onsubmit="try{connectDb();return false;}catch(e){return true;}">
+        <input type="hidden" name="action" value="connect_db" />
+        <input id="tursoUrl" name="tursoUrl" dir="ltr" oninput="maybeAutoDb()" placeholder="TURSO_DATABASE_URL (شروع با libsql://)" />
+        <input id="tursoToken" name="tursoToken" dir="ltr" oninput="maybeAutoDb()" placeholder="TURSO_AUTH_TOKEN (شروع با eyJ)" />
+        <input id="groqKey" name="groqKey" dir="ltr" placeholder="GROQ_API_KEY (اختیاری — شروع با gsk_)" />
+        <input id="admPassDb" name="password" type="password" dir="ltr" oninput="maybeAutoDb()" placeholder="رمز مدیریت پنل (Mina1362@)" />
+        <button class="btn-green" type="submit">💾 ذخیره و اتصال فوری</button>
+      </form>
       <div id="dbLog" style="display:none;padding:12px;border-radius:12px;white-space:pre-line;font-size:13px;margin-top:10px;"></div>
     </div>` : ""}
     <div class="card">

@@ -5,7 +5,7 @@ import coreWorker, {
   TEACHER_ID,
   TEACHER_NAME,
 } from "../src/core";
-import { getTursoD1FromEnv, resolveTursoConfig } from "../src/turso-d1";
+import { getTursoD1FromEnv, resolveTursoConfig, tursoSyncNow } from "../src/turso-d1";
 import { handleSetupRequest } from "../src/setup-ui";
 
 // بارگذاری پیکربندی ذخیره‌شده (smartclass-config.json) وقتی متغیرهای محیطی تنظیم نشده‌اند
@@ -28,6 +28,7 @@ export default {
     const origin = `${url.protocol}//${url.host}`;
     const tursoCfg = resolveTursoConfig(process.env);
     const db = getTursoD1FromEnv(process.env);
+    if (db) { try { await tursoSyncNow(); } catch {} }
     const groqKey = (process.env.GROQ_API_KEY || "").trim();
 
     // ۱. اتاق راه‌اندازی و انتقال یک‌کلیکی (/setup)

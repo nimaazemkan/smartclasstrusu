@@ -242,14 +242,39 @@ export function getTursoD1FromEnv(envObj: Record<string, string | undefined> = p
   const cfg = resolveTursoConfig(envObj);
   if (!cfg) return null;
   if (!cachedClient || cachedUrl !== cfg.url) {
-    cachedClient = createClient({
-      url: cfg.url,
-      authToken: cfg.authToken || undefined,
-    });
+    let client: any = null;
+    // replica توکار libsql: خواندن‌ها محلی (سریع) و نوشتن‌ها به سرور اصلی — برای میزبان‌های داخل ایران
+    if (!process.env.RENDER && !process.env.TURSO_NO_REPLICA && cfg.url.startsWith("libsql://")) {
+      try {
+        client = createClient({
+          url: "file:/tmp/smartclass-replica.db",
+          syncUrl: cfg.url,
+          authToken: cfg.authToken || undefined,
+        } as any);
+      } catch {
+        client = null;
+      }
+    }
+    if (!client) {
+      client = createClient({
+        url: cfg.url,
+        authToken: cfg.authToken || undefined,
+      });
+    }
+    cachedClient = client;
     cachedUrl = cfg.url;
     coreTablesBootstrapped = false;
     cachedAdapter = null;
   }
   if (!cachedAdapter) cachedAdapter = createTursoD1Adapter(cachedClient);
   return cachedAdapter;
+}
+
+
+// همگام‌سازی replica محلی با سرور اصلی (فقط وقتی replica فعال است کار می‌کند)
+export async function tursoSyncNow(): Promise<void> {
+  try {
+    const c: any = cachedClient;
+    if (c && typeof c.sync === "function") await c.sync();
+  } catch {}
 }

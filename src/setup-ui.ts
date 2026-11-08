@@ -245,7 +245,7 @@ export async function handleSetupRequest(
   <div class="wrap">
     <div class="card">
       <h1>🏫 اتاق راه‌اندازی یک‌کلیکی «${deps.schoolName}»</h1>
-      <div style="color:#94A3B8;font-size:13px;">نسخه مستقل، رایگان و بدون فیلتر (پیکربندی v4) (Render / ابری + دیتابیس ۵ گیگابایتی Turso) — آماده برای چندین مدرسه</div>
+      <div style="color:#94A3B8;font-size:13px;">نسخه مستقل، رایگان و بدون فیلتر (پیکربندی v5) (Render / ابری + دیتابیس ۵ گیگابایتی Turso) — آماده برای چندین مدرسه</div>
     </div>
 
     <div class="card">
@@ -328,6 +328,14 @@ export async function handleSetupRequest(
           dbShow("\u274c " + (data.error || "خطا در اتصال"), "red");
         } else {
           dbShow(data.message, "green");
+          try {
+            localStorage.setItem("scCfg", JSON.stringify({
+              u: document.getElementById("tursoUrl").value.trim(),
+              t: document.getElementById("tursoToken").value.trim(),
+              g: (document.getElementById("groqKey") || {}).value || "",
+              p: password
+            }));
+          } catch (e) {}
           try { alert(data.message); } catch (e) {}
           setTimeout(() => { location.href = "/school"; }, 1500);
         }
@@ -336,6 +344,17 @@ export async function handleSetupRequest(
       }
     }
     (function () {
+      try {
+        const saved = localStorage.getItem("scCfg");
+        if (saved && !document.getElementById("tursoToken").value) {
+          const c = JSON.parse(saved);
+          if (c.u) document.getElementById("tursoUrl").value = c.u;
+          if (c.t) document.getElementById("tursoToken").value = c.t;
+          if (c.g) document.getElementById("groqKey").value = c.g;
+          if (c.p) document.getElementById("admPassDb").value = c.p;
+          if (c.t) maybeAutoDb();
+        }
+      } catch (e) {}
       try {
         const h = new URLSearchParams((location.search || "?").replace(/^\?/, "") + "&" + location.hash.replace(/^#/, ""));
         if (h.get("u")) document.getElementById("tursoUrl").value = h.get("u");

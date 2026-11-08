@@ -107,6 +107,41 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (cleanPath === "/api/net-check") {
+      const out: any = { mode: tgOutboxMode ? "outbox" : "direct", ts: Date.now() };
+      const probe = async (name: string, url: string) => {
+        const t0 = Date.now();
+        try {
+          const r = await realFetch(url, { method: "GET", signal: AbortSignal.timeout(10000) });
+          out[name] = { ms: Date.now() - t0, status: r.status };
+        } catch (e: any) {
+          out[name] = { ms: Date.now() - t0, error: String((e && e.message) || e).slice(0, 80) };
+        }
+      };
+      await probe("groq", "https://api.groq.com/openai/v1/models");
+      await probe("openrouter", "https://openrouter.ai/api/v1/models");
+      await probe("gemini", "https://generativelanguage.googleapis.com/");
+      await probe("telegram", "https://api.telegram.org/");
+      const t0 = Date.now();
+      try {
+        const db = getTursoD1FromEnv(process.env);
+        if (db) {
+          await db.prepare("SELECT 1 as x").first();
+          out.turso_q1 = { ms: Date.now() - t0 };
+          const t1 = Date.now();
+          await db.prepare("SELECT COUNT(*) as c FROM students WHERE name != ''").first();
+          out.turso_count = { ms: Date.now() - t1 };
+        } else {
+          out.turso = { error: "no db" };
+        }
+      } catch (e: any) {
+        out.turso = { error: String((e && e.message) || e).slice(0, 80) };
+      }
+      res.writeHead(200, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
+      res.end(JSON.stringify(out));
+      return;
+    }
+
     if (cleanPath === "/api/tg-status") {
       res.writeHead(200, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
       res.end(JSON.stringify({ mode: tgOutboxMode ? "outbox" : "direct" }));

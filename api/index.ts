@@ -8,6 +8,20 @@ import coreWorker, {
 import { getTursoD1FromEnv, resolveTursoConfig } from "../src/turso-d1";
 import { handleSetupRequest } from "../src/setup-ui";
 
+// بارگذاری پیکربندی ذخیره‌شده (smartclass-config.json) وقتی متغیرهای محیطی تنظیم نشده‌اند
+// (برای میزبان‌هایی مثل گردو که ممکن است متغیر محیطی نداشته باشیم)
+import fs from "node:fs";
+import path from "node:path";
+try {
+  const cfgPath = path.join(process.cwd(), "smartclass-config.json");
+  if (fs.existsSync(cfgPath)) {
+    const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
+    for (const k of ["TURSO_DATABASE_URL", "TURSO_AUTH_TOKEN", "GROQ_API_KEY"]) {
+      if (!process.env[k] && cfg[k]) process.env[k] = String(cfg[k]);
+    }
+  }
+} catch {}
+
 export default {
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);

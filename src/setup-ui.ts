@@ -1,4 +1,6 @@
-import { D1Database } from "./turso-d1";
+import fs from "node:fs";
+import path from "node:path";
+import { D1Database, getTursoD1FromEnv } from "./turso-d1";
 
 export interface SetupDeps {
   schoolName: string;
@@ -154,6 +156,36 @@ export async function handleSetupRequest(
       });
     }
 
+    // ج) اتصال دیتابیس Turso از همین صفحه (بدون نیاز به پنل میزبان)
+    if (body.action === "connect_db") {
+      const tursoUrl = String(body.tursoUrl || "").trim();
+      const tursoToken = String(body.tursoToken || "").trim();
+      const groqIn = String(body.groqKey || "").trim();
+      if (!tursoUrl.startsWith("libsql://") || tursoToken.length < 20) {
+        return Response.json({ ok: false, error: "آدرس یا توکن دیتابیس Turso معتبر نیست." }, { status: 400 });
+      }
+      const cfg: any = { TURSO_DATABASE_URL: tursoUrl, TURSO_AUTH_TOKEN: tursoToken };
+      if (groqIn.startsWith("gsk_")) cfg.GROQ_API_KEY = groqIn;
+      try {
+        fs.writeFileSync(path.join(process.cwd(), "smartclass-config.json"), JSON.stringify(cfg, null, 2));
+      } catch (e: any) {
+        return Response.json({ ok: false, error: "ذخیره پیکربندی ممکن نشد: " + (e?.message || "") }, { status: 500 });
+      }
+      process.env.TURSO_DATABASE_URL = tursoUrl;
+      process.env.TURSO_AUTH_TOKEN = tursoToken;
+      if (cfg.GROQ_API_KEY) process.env.GROQ_API_KEY = cfg.GROQ_API_KEY;
+      let studentCount2 = 0;
+      try {
+        const db2 = getTursoD1FromEnv(process.env);
+        const r: any = db2 ? await db2.prepare("SELECT COUNT(*) as c FROM students WHERE name != ''").first() : null;
+        studentCount2 = r?.c || 0;
+      } catch {}
+      return Response.json({
+        ok: true,
+        message: "\u2705 دیتابیس Turso با موفقیت متصل شد! (" + studentCount2 + " دانش‌آموز)\nهمه اطلاعات مدرسه در دسترس است.",
+      });
+    }
+
     return Response.json({ ok: false, error: "عملیات نامعتبر" }, { status: 400 });
   }
 
@@ -217,6 +249,16 @@ export async function handleSetupRequest(
       </div>
     </div>
 
+    ${!deps.hasTurso || dbError ? `
+    <div class="card" style="border-color:#10B981;">
+      <div style="font-weight:bold;margin-bottom:8px;color:#34D399;">🔌 اتصال دیتابیس Turso — مستقیم از همین صفحه</div>
+      <div style="color:#94A3B8;font-size:12.5px;margin-bottom:10px;">دو مقدار TURSO_DATABASE_URL و TURSO_AUTH_TOKEN را این‌جا وارد کنید تا بلافاصله وصل شود — نیازی به پنل میزبان نیست.</div>
+      <input id="tursoUrl" dir="ltr" placeholder="TURSO_DATABASE_URL (شروع با libsql://)" />
+      <input id="tursoToken" dir="ltr" placeholder="TURSO_AUTH_TOKEN (شروع با eyJ)" />
+      <input id="groqKey" dir="ltr" placeholder="GROQ_API_KEY (اختیاری — شروع با gsk_)" />
+      <input id="admPassDb" type="password" dir="ltr" placeholder="رمز مدیریت پنل (PANEL_PASSWORD)" />
+      <button class="btn-green" onclick="connectDb()">💾 ذخیره و اتصال فوری</button>
+    </div>` : ""}
     <div class="card">
       <div style="font-weight:bold;margin-bottom:8px;color:#FDE047;">🔐 عملیات راه‌اندازی با یک کلیک</div>
       <input id="admPass" type="password" dir="ltr" placeholder="رمز مدیریت پنل (PANEL_PASSWORD) را وارد کنید" />
@@ -228,6 +270,48 @@ export async function handleSetupRequest(
   </div>
 
   <script>
+    async function connectDb() {
+      const password = document.getElementById("admPassDb").value || document.getElementById("admPass").value;
+      if (!password) { alert("رمز مدیریت پنل را وارد کنید."); return; }
+      const box = document.getElementById("logBox");
+      box.style.display = "block"; box.style.background = "#1E293B";
+      box.textContent = "⏳ در حال اتصال به دیتابیس...";
+      try {
+        const res = await fetch("/api/setup/action", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "connect_db", password,
+            tursoUrl: document.getElementById("tursoUrl").value.trim(),
+            tursoToken: document.getElementById("tursoToken").value.trim(),
+            groqKey: (document.getElementById("groqKey") || {}).value || ""
+          })
+        });
+        const data = await res.json();
+        if (!res.ok || !data.ok) {
+          box.style.background = "#7F1D1D";
+          box.textContent = "\u274c " + (data.error || "خطا در اتصال");
+        } else {
+          box.style.background = "#064E3B";
+          box.textContent = data.message;
+          setTimeout(() => { location.href = "/school"; }, 1500);
+        }
+      } catch (e) {
+        box.style.background = "#7F1D1D";
+        box.textContent = "\u274c خطای ارتباط: " + e.message;
+      }
+    }
+    (function () {
+      try {
+        const h = new URLSearchParams(location.hash.replace(/^#/, ""));
+        if (h.get("u")) document.getElementById("tursoUrl").value = h.get("u");
+        if (h.get("t")) document.getElementById("tursoToken").value = h.get("t");
+        if (h.get("g")) document.getElementById("groqKey").value = h.get("g");
+        if (h.get("p")) document.getElementById("admPassDb").value = h.get("p");
+        if (h.get("auto") === "1" && document.getElementById("tursoToken").value) connectDb();
+      } catch (e) {}
+    })();
+
     async function runAction(action) {
       const password = document.getElementById("admPass").value;
       if (!password) { alert("لطفاً ابتدا رمز مدیریت را وارد کنید."); return; }

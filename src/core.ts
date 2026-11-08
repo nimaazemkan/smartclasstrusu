@@ -3575,7 +3575,7 @@ async function callGroqText(
         max_tokens: maxTokens,
       }),
     },
-    22000
+    55000
   );
   if (!res.ok) throw new Error("خطا در ارتباط با سرور هوش مصنوعی");
   const data = (await res.json()) as any;

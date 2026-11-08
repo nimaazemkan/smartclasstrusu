@@ -4,6 +4,7 @@ import path from "node:path";
 import appHandler from "./api/index";
 import { getTursoD1FromEnv, tursoSyncNow, tursoDiag } from "./src/turso-d1";
 import { writeFileSync } from "fs";
+import { gzipSync } from "zlib";
 import { join as pJoin } from "path";
 import { BOT_TOKEN, aiChatComplete } from "./src/core";
 import { msAiRelay } from "./src/multi-school";
@@ -68,6 +69,21 @@ async function tgOutboxDrain(): Promise<void> {
 }
 
 // ==================== 🤖 صف درخواست‌های هوش مصنوعی (برای میزبان‌های داخل ایران) ====================
+function headersToObj(h: any): Record<string, string> {
+  const out: Record<string, string> = {};
+  try {
+    if (!h) return out;
+    if (typeof h.forEach === "function" && typeof h.get === "function") {
+      h.forEach((v: string, k: string) => { out[k] = v; });
+    } else if (Array.isArray(h)) {
+      for (const pair of h) { if (pair && pair.length >= 2) out[String(pair[0])] = String(pair[1]); }
+    } else if (typeof h === "object") {
+      for (const k of Object.keys(h)) { if (h[k] !== undefined && h[k] !== null) out[k] = String(h[k]); }
+    }
+  } catch {}
+  return out;
+}
+
 async function relayHttpFetch(url: string, init: any, bodyStr: string): Promise<Response> {
   const db = getTursoD1FromEnv(process.env);
   if (!db) throw new Error("relay: db not connected");
@@ -75,9 +91,10 @@ async function relayHttpFetch(url: string, init: any, bodyStr: string): Promise<
   const id = Date.now() * 1000 + Math.floor(Math.random() * 1000);
   await db
     .prepare("INSERT INTO ms_http_jobs (id, method, url, headers, body, status, created_at) VALUES (?,?,?,?,?, 'pending', ?)")
-    .bind(id, String(init.method || "GET"), url, JSON.stringify(init.headers || {}), bodyStr, Date.now())
+    .bind(id, String(init.method || "GET"), url, JSON.stringify(headersToObj(init.headers)), bodyStr, Date.now())
     .run();
-  for (let i = 0; i < 30; i++) {
+  for (let i = 0; i < 40; i++) {
+    if (init && init.signal && init.signal.aborted) throw new Error("timeout");
     await new Promise((r) => setTimeout(r, 1500));
     try { await tursoSyncNow(true); } catch {}
     const row: any = await db.prepare("SELECT status, resp_status, resp_body, error FROM ms_http_jobs WHERE id = ?").bind(id).first();
@@ -100,12 +117,25 @@ async function relayHttpFetch(url: string, init: any, bodyStr: string): Promise<
     // هوش مصنوعی در برخی میزبان‌ها (ایران) تحریم/مسدود است — درخواست‌ها را از طریق صف به نمونه‌ی متصل می‌فرستیم
     const AI_HOSTS = ["api.groq.com", "generativelanguage.googleapis.com", "openrouter.ai"];
     if (String(process.env.SMARTCLASS_RELAY || "") === "1" && AI_HOSTS.some((h) => url.includes(h))) {
-      const bodyStr = typeof (init as any)?.body === "string" ? String((init as any).body) : "";
+      let bodyStr = typeof (init as any)?.body === "string" ? String((init as any).body) : "";
+      if ((init as any)?.body && !bodyStr && typeof (init as any).body.entries === "function") {
+        try {
+          const parts: any[] = [];
+          for (const [k, v] of (init as any).body.entries()) {
+            if (typeof v === "string") parts.push({ k, v });
+            else {
+              const buf = Buffer.from(await (v as any).arrayBuffer());
+              parts.push({ k, b64: buf.toString("base64"), fn: (v as any).name || "file", ct: (v as any).type || "application/octet-stream" });
+            }
+          }
+          bodyStr = JSON.stringify({ __form: parts });
+        } catch { bodyStr = ""; }
+      }
       if (!(init as any)?.body || bodyStr) {
         try {
           return await relayHttpFetch(url, (init as any) || {}, bodyStr);
         } catch (eRH) {
-          // ادامه به فراخوانی مستقیم
+          return new Response(JSON.stringify({ error: "ارتباط با هوش مصنوعی برقرار نشد: " + String((eRH as any)?.message || eRH).slice(0, 110) }), { status: 502, headers: { "Content-Type": "application/json; charset=utf-8" } });
         }
       }
     }
@@ -254,6 +284,21 @@ const server = http.createServer(async (req, res) => {
           out[name] = { ms: Date.now() - t0, error: String((e && e.message) || e).slice(0, 120) };
         }
       };
+      if (String(req.url || "").includes("hdrs=1")) {
+        const th = Date.now();
+        try {
+          const hh = new Headers({ Authorization: "Bearer " + (process.env.GROQ_API_KEY || ""), "Content-Type": "application/json" });
+          const rr = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+            method: "POST",
+            headers: hh,
+            body: JSON.stringify({ model: "qwen/qwen3.8-27b", messages: [{ role: "user", content: "فقط عدد: 3+3 چند می شود؟" }], max_tokens: 8 }),
+          });
+          const jj: any = await rr.json().catch(() => ({}));
+          out.hdrsTest = { ms: Date.now() - th, status: rr.status, result: String(jj?.choices?.[0]?.message?.content || "").slice(0, 20) };
+        } catch (eH: any) {
+          out.hdrsTest = { ms: Date.now() - th, error: String((eH && eH.message) || eH).slice(0, 100) };
+        }
+      }
       await one("auto", "auto");
       await one("gemini", "gemini");
       await one("openrouter", "openrouter");
@@ -335,8 +380,24 @@ const server = http.createServer(async (req, res) => {
     });
 
     const respArrayBuf = await webRes.arrayBuffer();
+    let outBuf = Buffer.from(respArrayBuf);
+    const ct = String(outHeaders["content-type"] || "");
+    const wantsGzip = String(req.headers["accept-encoding"] || "").includes("gzip");
+    if (wantsGzip && outBuf.length > 1024 && /text\/|javascript|json|svg|xml/i.test(ct) && !outHeaders["content-encoding"]) {
+      try {
+        const gz = gzipSync(outBuf);
+        if (gz.length < outBuf.length) {
+          outHeaders["content-encoding"] = "gzip";
+          outHeaders["content-length"] = String(gz.length);
+          outHeaders["vary"] = "Accept-Encoding";
+          res.writeHead(webRes.status, outHeaders);
+          res.end(gz);
+          return;
+        }
+      } catch {}
+    }
     res.writeHead(webRes.status, outHeaders);
-    res.end(Buffer.from(respArrayBuf));
+    res.end(outBuf);
   } catch (err: any) {
     console.error("Server Request Error:", err);
     res.writeHead(500, { "Content-Type": "application/json; charset=utf-8" });
@@ -394,7 +455,21 @@ async function aiJobsDrain(): Promise<void> {
       for (const r of ((hres && hres.results) || []) as any[]) {
         try {
           await db.prepare("UPDATE ms_http_jobs SET attempts = attempts + 1, status = 'running' WHERE id = ?").bind(r.id).run();
-          const resp = await realFetch(String(r.url), { method: String(r.method || "GET"), headers: JSON.parse(String(r.headers || "{}")), body: r.body ? String(r.body) : undefined });
+          const hdrs: any = JSON.parse(String(r.headers || "{}"));
+          let bodyArg: any = r.body ? String(r.body) : undefined;
+          if (bodyArg && bodyArg.indexOf('{"__form"') === 0) {
+            try {
+              const parts = JSON.parse(bodyArg).__form || [];
+              const fd = new FormData();
+              for (const pt of parts) {
+                if (pt.b64 !== undefined) fd.append(pt.k, new Blob([Buffer.from(pt.b64, "base64")], { type: pt.ct }), pt.fn);
+                else fd.append(pt.k, pt.v);
+              }
+              bodyArg = fd;
+              for (const hk of Object.keys(hdrs)) if (hk.toLowerCase() === "content-type") delete hdrs[hk];
+            } catch {}
+          }
+          const resp = await realFetch(String(r.url), { method: String(r.method || "GET"), headers: hdrs, body: bodyArg });
           const txt = await resp.text();
           await db.prepare("UPDATE ms_http_jobs SET status = 'done', resp_status = ?, resp_body = ? WHERE id = ?").bind(resp.status, txt.slice(0, 300000), r.id).run();
         } catch (e2: any) {

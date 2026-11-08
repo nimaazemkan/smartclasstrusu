@@ -4,6 +4,7 @@ import path from "node:path";
 import appHandler from "./api/index";
 import { getTursoD1FromEnv } from "./src/turso-d1";
 import { BOT_TOKEN, aiChatComplete } from "./src/core";
+import { msAiRelay } from "./src/multi-school";
 
 const PORT = Number(process.env.PORT || 3000);
 let cachedPdfJsBuf: Buffer | null = null;
@@ -164,6 +165,16 @@ const server = http.createServer(async (req, res) => {
       await one("auto", "auto");
       await one("gemini", "gemini");
       await one("openrouter", "openrouter");
+      if (url && url.includes("relay=1")) {
+        const t0 = Date.now();
+        try {
+          const dbx = getTursoD1FromEnv(process.env);
+          const r = await msAiRelay(dbx, "auto", "پاسخ کوتاه بده.", "1+1 چند می شود؟ فقط عدد بنویس.");
+          out.relay = { ms: Date.now() - t0, result: String(r).slice(0, 40) };
+        } catch (e: any) {
+          out.relay = { ms: Date.now() - t0, error: String((e && e.message) || e).slice(0, 120) };
+        }
+      }
       res.writeHead(200, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
       res.end(JSON.stringify(out));
       return;
@@ -259,6 +270,33 @@ server.listen(PORT, "0.0.0.0", () => {
   console.log(`✅ SmartClass Server running on http://0.0.0.0:${PORT}`);
 });
 
+async function aiJobsDrain(): Promise<void> {
+  try {
+    const db = getTursoD1FromEnv(process.env);
+    if (!db) return;
+    await db.prepare("CREATE TABLE IF NOT EXISTS ms_ai_jobs (id INTEGER PRIMARY KEY, provider TEXT, sys TEXT, user TEXT, result TEXT, error TEXT, status TEXT DEFAULT 'pending', attempts INTEGER DEFAULT 0, created_at INTEGER)").run();
+    try { await db.prepare("UPDATE ms_ai_jobs SET status = 'pending' WHERE status = 'running' AND created_at < ?").bind(Date.now() - 150000).run(); } catch {}
+    const res: any = await db.prepare("SELECT id, provider, sys, user FROM ms_ai_jobs WHERE status = 'pending' AND attempts < 3 ORDER BY id LIMIT 3").all();
+    const rows: any[] = (res && res.results) || [];
+    for (const r of rows) {
+      try {
+        await db.prepare("UPDATE ms_ai_jobs SET attempts = attempts + 1, status = 'running' WHERE id = ?").bind(r.id).run();
+        let key = "";
+        if (r.provider === "gemini" || r.provider === "openrouter") {
+          try {
+            const kr: any = await db.prepare("SELECT api_key FROM ms_ai_keys WHERE provider = ?").bind(r.provider).first();
+            key = String((kr && kr.api_key) || "");
+          } catch {}
+        }
+        const out = await aiChatComplete({ GROQ_API_KEY: process.env.GROQ_API_KEY || "" } as any, String(r.provider || "auto"), String(r.sys || ""), String(r.user || ""), key);
+        await db.prepare("UPDATE ms_ai_jobs SET status = 'done', result = ? WHERE id = ?").bind(String(out).slice(0, 24000), r.id).run();
+      } catch (e: any) {
+        try { await db.prepare("UPDATE ms_ai_jobs SET status = 'error', error = ? WHERE id = ?").bind(String((e && e.message) || e).slice(0, 300), r.id).run(); } catch {}
+      }
+    }
+  } catch {}
+}
+
 // تشخیص خودکار دسترسی به تلگرام + شروع تخلیه‌ی صف فقط در نمونه‌ی متصل
 (async () => {
   try {
@@ -268,7 +306,8 @@ server.listen(PORT, "0.0.0.0", () => {
     tgOutboxMode = true;
   }
   console.log("Telegram relay mode:", tgOutboxMode ? "OUTBOX (queue -> relay node sends)" : "direct");
+  process.env.SMARTCLASS_RELAY = tgOutboxMode ? "1" : "0";
   if (!tgOutboxMode) {
-    setInterval(() => { tgOutboxDrain(); }, 5000);
+    setInterval(() => { tgOutboxDrain(); aiJobsDrain(); }, 5000);
   }
 })();

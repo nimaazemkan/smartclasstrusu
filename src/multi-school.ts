@@ -5,6 +5,7 @@
 // ============================================================================
 
 import type { D1Database } from "./turso-d1";
+import { tursoSyncNow } from "./turso-d1";
 import { getLiveRoomPublicStatus, getLiveRoomsStats } from "./live-class";
 
 export const SUPER_ADMIN_PASSWORD = process.env.SUPER_ADMIN_PASSWORD || "SuperMina1362@";
@@ -14,7 +15,35 @@ function msNum(v: any): number {
 }
 
 // فراخوانی هوش مصنوعی با پشتیبان خودکار: auto = Groq سپس Gemini سپس OpenRouter
+export async function msAiRelay(db: any, provider: string, sys: string, user: string): Promise<string> {
+  await db.prepare("CREATE TABLE IF NOT EXISTS ms_ai_jobs (id INTEGER PRIMARY KEY, provider TEXT, sys TEXT, user TEXT, result TEXT, error TEXT, status TEXT DEFAULT 'pending', attempts INTEGER DEFAULT 0, created_at INTEGER)").run();
+  const id = Date.now() * 1000 + Math.floor(Math.random() * 1000);
+  await db
+    .prepare("INSERT INTO ms_ai_jobs (id, provider, sys, user, status, created_at) VALUES (?,?,?,?, 'pending', ?)")
+    .bind(id, String(provider || "auto"), String(sys || "").slice(0, 6000), String(user || "").slice(0, 6000), Date.now())
+    .run();
+  for (let i = 0; i < 35; i++) {
+    await new Promise((r) => setTimeout(r, 2000));
+    try { await tursoSyncNow(); } catch {}
+    const row: any = await db.prepare("SELECT status, result, error FROM ms_ai_jobs WHERE id = ?").bind(id).first();
+    if (row && row.status === "done") {
+      try { await db.prepare("DELETE FROM ms_ai_jobs WHERE id = ?").bind(id).run(); } catch {}
+      return String(row.result || "");
+    }
+    if (row && row.status === "error") {
+      try { await db.prepare("DELETE FROM ms_ai_jobs WHERE id = ?").bind(id).run(); } catch {}
+      throw new Error(String(row.error || "هوش مصنوعی پاسخ نداد."));
+    }
+  }
+  try { await db.prepare("DELETE FROM ms_ai_jobs WHERE id = ?").bind(id).run(); } catch {}
+  throw new Error("پاسخ هوش مصنوعی به‌موقع نرسید.");
+}
+
 async function msAiCall(deps: any, db: any, provider: string, sys: string, user: string): Promise<string> {
+  // نمونه‌ی داخل ایران: سرویس‌های هوش مصنوعی تحریم/مسدود → از طریق صف، نمونه‌ی خارج اجرا می‌کند
+  if (String((process as any).env.SMARTCLASS_RELAY || "") === "1") {
+    return await msAiRelay(db, provider, sys, user);
+  }
   const order = provider && provider !== "auto" ? [provider] : ["auto", "gemini", "openrouter"];
   let lastErr = "";
   for (const prov of order) {
@@ -31,7 +60,12 @@ async function msAiCall(deps: any, db: any, provider: string, sys: string, user:
       lastErr = String((e as any)?.message || e).slice(0, 140);
     }
   }
-  throw new Error(lastErr || "هوش مصنوعی پاسخ نداد.");
+  // تلاش آخر: ارسال از طریق صف به نمونه‌ی متصل
+  try {
+    return await msAiRelay(db, provider, sys, user);
+  } catch (eR) {
+    throw new Error(lastErr || String((eR as any)?.message || eR).slice(0, 140));
+  }
 }
 
 

@@ -148,7 +148,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (cleanPath === "/api/net-check") {
-      const out: any = { mode: tgOutboxMode ? "outbox" : "direct", ts: Date.now() };
+      const out: any = { build: "v6", mode: tgOutboxMode ? "outbox" : "direct", ts: Date.now() };
       const probe = async (name: string, url: string) => {
         const t0 = Date.now();
         try {

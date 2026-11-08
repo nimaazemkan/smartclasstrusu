@@ -253,7 +253,7 @@ export function getTursoD1FromEnv(envObj: Record<string, string | undefined> = p
         try {
           client = createNodeClient({
             url: rp,
-            syncUrl: cfg.url,
+            syncUrl: String(cfg.url).replace(/^https:\/\//i, "libsql://").replace(/^http:\/\//i, "libsql://"),
             authToken: cfg.authToken || undefined,
           } as any);
           _replicaInfo = { active: true, detail: rp };

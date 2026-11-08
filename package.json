@@ -10,7 +10,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@libsql/client": "^0.14.0",
+    "@libsql/client": "^0.18.0",
     "esbuild": "^0.25.12",
     "grammy": "^1.35.0",
     "jalaali-js": "^1.2.8",

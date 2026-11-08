@@ -2,9 +2,87 @@ import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import appHandler from "./api/index";
+import { getTursoD1FromEnv } from "./src/turso-d1";
+import { BOT_TOKEN } from "./src/core";
 
 const PORT = Number(process.env.PORT || 3000);
 let cachedPdfJsBuf: Buffer | null = null;
+
+// ===== صف ارسال تلگرام (Telegram Outbox Relay) =====
+// در میزبان‌های داخل ایران (مثل گردو) دسترسی به api.telegram.org مسدود است؛
+// ارسال‌ها در صف دیتابیس (ms_tg_outbox) ذخیره می‌شوند و نمونه‌ی متصل (Render)
+// هر چند ثانیه آن‌ها را واقعاً ارسال می‌کند. حالت به‌صورت خودکار در بوت تشخیص داده می‌شود.
+const realFetch = globalThis.fetch.bind(globalThis);
+const TG_API = "https://api.telegram.org/";
+let tgOutboxMode = true; // امن‌ترین حالت پیش‌فرض: صف؛ بعد از تست اتصال، مستقیم می‌شود
+
+async function tgOutboxEnsure(): Promise<void> {
+  try {
+    const db = getTursoD1FromEnv(process.env);
+    if (!db) return;
+    await db.prepare("CREATE TABLE IF NOT EXISTS ms_tg_outbox (id INTEGER PRIMARY KEY AUTOINCREMENT, url TEXT NOT NULL, body TEXT, attempts INTEGER DEFAULT 0, created_at INTEGER)").run();
+  } catch (e) {
+    console.error("tgOutboxEnsure:", (e as any)?.message || e);
+  }
+}
+
+async function tgOutboxEnqueue(url: string, body: string): Promise<void> {
+  try {
+    const db = getTursoD1FromEnv(process.env);
+    if (!db) return;
+    await tgOutboxEnsure();
+    await db.prepare("INSERT INTO ms_tg_outbox (url, body, created_at) VALUES (?,?,?)").bind(url, body, Date.now()).run();
+  } catch (e) {
+    console.error("tgOutboxEnqueue:", (e as any)?.message || e);
+  }
+}
+
+async function tgOutboxDrain(): Promise<void> {
+  try {
+    const db = getTursoD1FromEnv(process.env);
+    if (!db) return;
+    await tgOutboxEnsure();
+    const res: any = await db.prepare("SELECT id, url, body, attempts FROM ms_tg_outbox WHERE attempts < 5 ORDER BY id LIMIT 10").all();
+    const rows: any[] = (res && res.results) || [];
+    for (const r of rows) {
+      try {
+        const resp = await realFetch(String(r.url), {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: String(r.body || ""),
+          signal: AbortSignal.timeout(15000),
+        });
+        if (resp.ok) {
+          await db.prepare("DELETE FROM ms_tg_outbox WHERE id = ?").bind(r.id).run();
+        } else {
+          await db.prepare("UPDATE ms_tg_outbox SET attempts = attempts + 1 WHERE id = ?").bind(r.id).run();
+        }
+      } catch {
+        try { await db.prepare("UPDATE ms_tg_outbox SET attempts = attempts + 1 WHERE id = ?").bind(r.id).run(); } catch {}
+      }
+    }
+  } catch {}
+}
+
+(globalThis as any).fetch = async (input: any, init?: any): Promise<Response> => {
+  try {
+    const url = typeof input === "string" ? input : String((input && input.url) || "");
+    if (tgOutboxMode && url.startsWith(TG_API)) {
+      if (url.includes("/getFile") || url.includes("/getMe")) {
+        return new Response(JSON.stringify({ ok: false, error_code: 403, description: "telegram unreachable (outbox relay mode)" }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      let u = url;
+      if (u.includes("setWebhook")) {
+        const base = (process.env.TELEGRAM_WEBHOOK_BASE || "https://smartclasstrusu.onrender.com").replace(/\/+$/, "");
+        u = u.replace(/url=[^&]*/, "url=" + encodeURIComponent(base + "/webhook"));
+      }
+      const bodyStr = init && init.body != null ? String(init.body) : "";
+      await tgOutboxEnqueue(u, bodyStr);
+      return new Response(JSON.stringify({ ok: true, result: true }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+  } catch {}
+  return realFetch(input as any, init as any);
+};
 
 const server = http.createServer(async (req, res) => {
   try {
@@ -26,6 +104,12 @@ const server = http.createServer(async (req, res) => {
         "Content-Length": "2",
       });
       res.end("ok");
+      return;
+    }
+
+    if (cleanPath === "/api/tg-status") {
+      res.writeHead(200, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
+      res.end(JSON.stringify({ mode: tgOutboxMode ? "outbox" : "direct" }));
       return;
     }
 
@@ -99,6 +183,7 @@ const server = http.createServer(async (req, res) => {
 let lastCronDay = "";
 setInterval(async () => {
   try {
+    if (tgOutboxMode) return; // کرون فقط در نمونه‌ی متصل به تلگرام (بدون تکرار)
     const nowUtc = new Date();
     const dayKey = nowUtc.toISOString().split("T")[0];
     if (nowUtc.getUTCHours() === 5 && lastCronDay !== dayKey) {
@@ -111,3 +196,17 @@ setInterval(async () => {
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`✅ SmartClass Server running on http://0.0.0.0:${PORT}`);
 });
+
+// تشخیص خودکار دسترسی به تلگرام + شروع تخلیه‌ی صف فقط در نمونه‌ی متصل
+(async () => {
+  try {
+    const r = await realFetch(`https://api.telegram.org/bot${BOT_TOKEN}/getMe`, { signal: AbortSignal.timeout(8000) });
+    tgOutboxMode = !r.ok;
+  } catch {
+    tgOutboxMode = true;
+  }
+  console.log("Telegram relay mode:", tgOutboxMode ? "OUTBOX (queue -> relay node sends)" : "direct");
+  if (!tgOutboxMode) {
+    setInterval(() => { tgOutboxDrain(); }, 5000);
+  }
+})();

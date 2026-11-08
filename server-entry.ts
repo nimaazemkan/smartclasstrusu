@@ -223,6 +223,7 @@ const server = http.createServer(async (req, res) => {
           await db.prepare("SELECT COUNT(*) as c FROM students WHERE name != ''").first();
           out.turso_count2 = { ms: Date.now() - t2 };
           out.diag = tursoDiag();
+          out.flags = { RENDER: process.env.RENDER ? "set" : "", NO_REPLICA: process.env.TURSO_NO_REPLICA ? "set" : "" };
         } else {
           out.turso = { error: "no db" };
         }

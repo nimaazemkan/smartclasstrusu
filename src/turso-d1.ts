@@ -247,7 +247,7 @@ export function getTursoD1FromEnv(envObj: Record<string, string | undefined> = p
     let client: any = null;
     _replicaInfo = { active: false, detail: "" };
     // replica توکار libsql: خواندن‌ها محلی (سریع) و نوشتن‌ها به سرور اصلی — برای میزبان‌های داخل ایران
-    if (!process.env.RENDER && !process.env.TURSO_NO_REPLICA && cfg.url.startsWith("libsql://")) {
+    if (!process.env.TURSO_NO_REPLICA && (cfg.url.startsWith("libsql://") || cfg.url.startsWith("https://"))) {
       const paths = ["file:" + (process.env.TMPDIR || "/tmp") + "/smartclass-replica.db", "file:/tmp/smartclass-replica.db", "file::memory:"];
       for (const rp of paths) {
         try {

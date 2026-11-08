@@ -3,6 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 import appHandler from "./api/index";
 import { getTursoD1FromEnv, tursoSyncNow, tursoDiag } from "./src/turso-d1";
+import { writeFileSync } from "fs";
+import { join as pJoin } from "path";
 import { BOT_TOKEN, aiChatComplete } from "./src/core";
 import { msAiRelay } from "./src/multi-school";
 
@@ -144,6 +146,52 @@ const server = http.createServer(async (req, res) => {
         "Content-Length": "2",
       });
       res.end("ok");
+      return;
+    }
+
+    // ⚡ اتصال خودکار دیتابیس از راه دور — معادل پر کردن فرم /setup ولی با یک لینک GET
+    if (cleanPath === "/api/setup/quick") {
+      const q = new URL(String(req.url || "/"), "http://l").searchParams;
+      const wantPass = String(process.env.PANEL_PASSWORD || "Mina1362@");
+      const pwd = String(q.get("p") || q.get("password") || "");
+      const html = (title: string, body: string, ok: boolean) =>
+        "<!DOCTYPE html><html lang='fa' dir='rtl'><meta charset='utf-8'><meta name='viewport' content='width=device-width'><body style='background:#0F172A;color:#fff;font-family:Tahoma;text-align:center;padding:36px'><h1 style='font-size:44px;margin:10px'>" + (ok ? "\u2705" : "\u26a0\ufe0f") + "</h1><h2>" + title + "</h2><p style='font-size:19px;line-height:2'>" + body + "</p><a style='color:#38BDF8;font-size:20px;line-height:2.6' href='/school'>\u2190 ورود به پنل مدرسه</a></body></html>";
+      if (pwd !== wantPass) {
+        res.writeHead(403, { "Content-Type": "text/html; charset=utf-8" });
+        res.end(html("رمز نادرست است", "پارامتر p= با رمز مدیر مطابقت ندارد.", false));
+        return;
+      }
+      const u = String(q.get("u") || "").trim();
+      const t = String(q.get("t") || "").trim();
+      const g = String(q.get("g") || "").trim();
+      if (!u.startsWith("libsql://") || t.length < 20) {
+        res.writeHead(400, { "Content-Type": "text/html; charset=utf-8" });
+        res.end(html("مقادیر ناقص است", "پارامترهای u= (آدرس Turso) و t= (توکن) لازم است.", false));
+        return;
+      }
+      process.env.TURSO_DATABASE_URL = u;
+      process.env.TURSO_AUTH_TOKEN = t;
+      if (g.startsWith("gsk_")) process.env.GROQ_API_KEY = g;
+      let note = "";
+      try {
+        const cfg: any = { TURSO_DATABASE_URL: u, TURSO_AUTH_TOKEN: t };
+        if (g.startsWith("gsk_")) cfg.GROQ_API_KEY = g;
+        writeFileSync(pJoin(process.cwd(), "smartclass-config.json"), JSON.stringify(cfg, null, 2));
+      } catch (e: any) {
+        note = " (ذخیره‌ی فایل ممکن نشد؛ در حافظه فعال شد)";
+      }
+      let cnt = 0;
+      try {
+        const db = getTursoD1FromEnv(process.env);
+        const r: any = db ? await db.prepare("SELECT COUNT(*) as c FROM students WHERE name != ''").first() : null;
+        cnt = Number((r && r.c) || 0);
+      } catch (e: any) {
+        res.writeHead(500, { "Content-Type": "text/html; charset=utf-8" });
+        res.end(html("اتصال برقرار نشد", String((e && e.message) || e).slice(0, 160), false));
+        return;
+      }
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      res.end(html("اتصال دیتابیس انجام شد!", "دیتابیس Turso با موفقیت وصل شد &mdash; <b>" + cnt + " دانش‌آموز</b> در دسترس است." + note + "<br><span style='opacity:.7'>quick-connect v1</span>", true));
       return;
     }
 

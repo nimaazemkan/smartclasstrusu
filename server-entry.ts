@@ -299,9 +299,12 @@ const server = http.createServer(async (req, res) => {
           out.hdrsTest = { ms: Date.now() - th, error: String((eH && eH.message) || eH).slice(0, 100) };
         }
       }
-      await one("auto", "auto");
-      await one("gemini", "gemini");
-      await one("openrouter", "openrouter");
+      const onlyHdrs = String(req.url || "").includes("only=hdrs");
+      if (!onlyHdrs) {
+        await one("auto", "auto");
+        await one("gemini", "gemini");
+        await one("openrouter", "openrouter");
+      }
       if (String(req.url || "").includes("relay=1")) {
         const t0 = Date.now();
         try {

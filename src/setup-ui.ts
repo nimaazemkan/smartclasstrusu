@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import path from "node:path";
+import nodePath from "node:path";
 import { D1Database, getTursoD1FromEnv } from "./turso-d1";
 
 export interface SetupDeps {
@@ -167,7 +167,7 @@ export async function handleSetupRequest(
       const cfg: any = { TURSO_DATABASE_URL: tursoUrl, TURSO_AUTH_TOKEN: tursoToken };
       if (groqIn.startsWith("gsk_")) cfg.GROQ_API_KEY = groqIn;
       try {
-        fs.writeFileSync(path.join(process.cwd(), "smartclass-config.json"), JSON.stringify(cfg, null, 2));
+        fs.writeFileSync(nodePath.join(process.cwd(), "smartclass-config.json"), JSON.stringify(cfg, null, 2));
       } catch (e: any) {
         return Response.json({ ok: false, error: "ذخیره پیکربندی ممکن نشد: " + (e?.message || "") }, { status: 500 });
       }
@@ -229,7 +229,7 @@ export async function handleSetupRequest(
   <div class="wrap">
     <div class="card">
       <h1>🏫 اتاق راه‌اندازی یک‌کلیکی «${deps.schoolName}»</h1>
-      <div style="color:#94A3B8;font-size:13px;">نسخه مستقل، رایگان و بدون فیلتر (Render / ابری + دیتابیس ۵ گیگابایتی Turso) — آماده برای چندین مدرسه</div>
+      <div style="color:#94A3B8;font-size:13px;">نسخه مستقل، رایگان و بدون فیلتر (پیکربندی v2) (Render / ابری + دیتابیس ۵ گیگابایتی Turso) — آماده برای چندین مدرسه</div>
     </div>
 
     <div class="card">

@@ -303,7 +303,7 @@ export async function handleSetupRequest(
     }
     (function () {
       try {
-        const h = new URLSearchParams(location.hash.replace(/^#/, ""));
+        const h = new URLSearchParams((location.search || "?").replace(/^\?/, "") + "&" + location.hash.replace(/^#/, ""));
         if (h.get("u")) document.getElementById("tursoUrl").value = h.get("u");
         if (h.get("t")) document.getElementById("tursoToken").value = h.get("t");
         if (h.get("g")) document.getElementById("groqKey").value = h.get("g");

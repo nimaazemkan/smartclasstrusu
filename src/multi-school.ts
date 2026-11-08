@@ -24,7 +24,7 @@ export async function msAiRelay(db: any, provider: string, sys: string, user: st
     .run();
   for (let i = 0; i < 35; i++) {
     await new Promise((r) => setTimeout(r, 2000));
-    try { await tursoSyncNow(); } catch {}
+    try { await tursoSyncNow(true); } catch {}
     const row: any = await db.prepare("SELECT status, result, error FROM ms_ai_jobs WHERE id = ?").bind(id).first();
     if (row && row.status === "done") {
       try { await db.prepare("DELETE FROM ms_ai_jobs WHERE id = ?").bind(id).run(); } catch {}

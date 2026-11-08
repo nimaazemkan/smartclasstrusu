@@ -2,7 +2,7 @@ import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import appHandler from "./api/index";
-import { getTursoD1FromEnv } from "./src/turso-d1";
+import { getTursoD1FromEnv, tursoSyncNow, tursoDiag } from "./src/turso-d1";
 import { BOT_TOKEN, aiChatComplete } from "./src/core";
 import { msAiRelay } from "./src/multi-school";
 
@@ -65,9 +65,48 @@ async function tgOutboxDrain(): Promise<void> {
   } catch {}
 }
 
+// ==================== 🤖 صف درخواست‌های هوش مصنوعی (برای میزبان‌های داخل ایران) ====================
+async function relayHttpFetch(url: string, init: any, bodyStr: string): Promise<Response> {
+  const db = getTursoD1FromEnv(process.env);
+  if (!db) throw new Error("relay: db not connected");
+  await db.prepare("CREATE TABLE IF NOT EXISTS ms_http_jobs (id INTEGER PRIMARY KEY, method TEXT, url TEXT, headers TEXT, body TEXT, resp_status INTEGER, resp_body TEXT, error TEXT, status TEXT DEFAULT 'pending', attempts INTEGER DEFAULT 0, created_at INTEGER)").run();
+  const id = Date.now() * 1000 + Math.floor(Math.random() * 1000);
+  await db
+    .prepare("INSERT INTO ms_http_jobs (id, method, url, headers, body, status, created_at) VALUES (?,?,?,?,?, 'pending', ?)")
+    .bind(id, String(init.method || "GET"), url, JSON.stringify(init.headers || {}), bodyStr, Date.now())
+    .run();
+  for (let i = 0; i < 30; i++) {
+    await new Promise((r) => setTimeout(r, 1500));
+    try { await tursoSyncNow(true); } catch {}
+    const row: any = await db.prepare("SELECT status, resp_status, resp_body, error FROM ms_http_jobs WHERE id = ?").bind(id).first();
+    if (row && row.status === "done") {
+      try { await db.prepare("DELETE FROM ms_http_jobs WHERE id = ?").bind(id).run(); } catch {}
+      return new Response(String(row.resp_body || ""), { status: Number(row.resp_status || 200), headers: { "Content-Type": "application/json; charset=utf-8" } });
+    }
+    if (row && row.status === "error") {
+      try { await db.prepare("DELETE FROM ms_http_jobs WHERE id = ?").bind(id).run(); } catch {}
+      throw new Error(String(row.error || "relay failed"));
+    }
+  }
+  try { await db.prepare("DELETE FROM ms_http_jobs WHERE id = ?").bind(id).run(); } catch {}
+  throw new Error("پاسخ هوش مصنوعی به‌موقع نرسید.");
+}
+
 (globalThis as any).fetch = async (input: any, init?: any): Promise<Response> => {
   try {
     const url = typeof input === "string" ? input : String((input && input.url) || "");
+    // هوش مصنوعی در برخی میزبان‌ها (ایران) تحریم/مسدود است — درخواست‌ها را از طریق صف به نمونه‌ی متصل می‌فرستیم
+    const AI_HOSTS = ["api.groq.com", "generativelanguage.googleapis.com", "openrouter.ai"];
+    if (String(process.env.SMARTCLASS_RELAY || "") === "1" && AI_HOSTS.some((h) => url.includes(h))) {
+      const bodyStr = typeof (init as any)?.body === "string" ? String((init as any).body) : "";
+      if (!(init as any)?.body || bodyStr) {
+        try {
+          return await relayHttpFetch(url, (init as any) || {}, bodyStr);
+        } catch (eRH) {
+          // ادامه به فراخوانی مستقیم
+        }
+      }
+    }
     if (tgOutboxMode && url.startsWith(TG_API)) {
       if (url.includes("/getFile") || url.includes("/getMe")) {
         return new Response(JSON.stringify({ ok: false, error_code: 403, description: "telegram unreachable (outbox relay mode)" }), { status: 200, headers: { "content-type": "application/json" } });
@@ -132,6 +171,10 @@ const server = http.createServer(async (req, res) => {
           const t1 = Date.now();
           await db.prepare("SELECT COUNT(*) as c FROM students WHERE name != ''").first();
           out.turso_count = { ms: Date.now() - t1 };
+          const t2 = Date.now();
+          await db.prepare("SELECT COUNT(*) as c FROM students WHERE name != ''").first();
+          out.turso_count2 = { ms: Date.now() - t2 };
+          out.diag = tursoDiag();
         } else {
           out.turso = { error: "no db" };
         }
@@ -294,6 +337,22 @@ async function aiJobsDrain(): Promise<void> {
         try { await db.prepare("UPDATE ms_ai_jobs SET status = 'error', error = ? WHERE id = ?").bind(String((e && e.message) || e).slice(0, 300), r.id).run(); } catch {}
       }
     }
+    // درخواست‌های HTTP خام هوش مصنوعی (askAI / aiTool / generateQuiz و...)
+    try {
+      await db.prepare("CREATE TABLE IF NOT EXISTS ms_http_jobs (id INTEGER PRIMARY KEY, method TEXT, url TEXT, headers TEXT, body TEXT, resp_status INTEGER, resp_body TEXT, error TEXT, status TEXT DEFAULT 'pending', attempts INTEGER DEFAULT 0, created_at INTEGER)").run();
+      try { await db.prepare("UPDATE ms_http_jobs SET status = 'pending' WHERE status = 'running' AND created_at < ?").bind(Date.now() - 150000).run(); } catch {}
+      const hres: any = await db.prepare("SELECT id, method, url, headers, body FROM ms_http_jobs WHERE status = 'pending' AND attempts < 2 ORDER BY id LIMIT 3").all();
+      for (const r of ((hres && hres.results) || []) as any[]) {
+        try {
+          await db.prepare("UPDATE ms_http_jobs SET attempts = attempts + 1, status = 'running' WHERE id = ?").bind(r.id).run();
+          const resp = await realFetch(String(r.url), { method: String(r.method || "GET"), headers: JSON.parse(String(r.headers || "{}")), body: r.body ? String(r.body) : undefined });
+          const txt = await resp.text();
+          await db.prepare("UPDATE ms_http_jobs SET status = 'done', resp_status = ?, resp_body = ? WHERE id = ?").bind(resp.status, txt.slice(0, 300000), r.id).run();
+        } catch (e2: any) {
+          try { await db.prepare("UPDATE ms_http_jobs SET status = 'error', error = ? WHERE id = ?").bind(String((e2 && e2.message) || e2).slice(0, 300), r.id).run(); } catch {}
+        }
+      }
+    } catch {}
   } catch {}
 }
 

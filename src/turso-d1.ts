@@ -1,4 +1,6 @@
 import { createClient, Client, InValue } from "@libsql/client/web";
+// نسخه‌ی Node برای replica محلی (نسخه‌ی web فقط HTTP است و file نمی‌سازد)
+import { createClient as createNodeClient } from "@libsql/client";
 
 export interface D1Meta {
   last_row_id: number;
@@ -243,16 +245,23 @@ export function getTursoD1FromEnv(envObj: Record<string, string | undefined> = p
   if (!cfg) return null;
   if (!cachedClient || cachedUrl !== cfg.url) {
     let client: any = null;
+    _replicaInfo = { active: false, detail: "" };
     // replica توکار libsql: خواندن‌ها محلی (سریع) و نوشتن‌ها به سرور اصلی — برای میزبان‌های داخل ایران
     if (!process.env.RENDER && !process.env.TURSO_NO_REPLICA && cfg.url.startsWith("libsql://")) {
-      try {
-        client = createClient({
-          url: "file:/tmp/smartclass-replica.db",
-          syncUrl: cfg.url,
-          authToken: cfg.authToken || undefined,
-        } as any);
-      } catch {
-        client = null;
+      const paths = ["file:" + (process.env.TMPDIR || "/tmp") + "/smartclass-replica.db", "file:/tmp/smartclass-replica.db", "file::memory:"];
+      for (const rp of paths) {
+        try {
+          client = createNodeClient({
+            url: rp,
+            syncUrl: cfg.url,
+            authToken: cfg.authToken || undefined,
+          } as any);
+          _replicaInfo = { active: true, detail: rp };
+          break;
+        } catch (eR: any) {
+          _replicaInfo = { active: false, detail: String((eR && eR.message) || eR).slice(0, 120) };
+          client = null;
+        }
       }
     }
     if (!client) {
@@ -266,15 +275,68 @@ export function getTursoD1FromEnv(envObj: Record<string, string | undefined> = p
     coreTablesBootstrapped = false;
     cachedAdapter = null;
   }
-  if (!cachedAdapter) cachedAdapter = createTursoD1Adapter(cachedClient);
+  if (!cachedAdapter) cachedAdapter = withResultCache(createTursoD1Adapter(cachedClient));
   return cachedAdapter;
+}
+
+// کش کوتاه‌مدت نتایج SELECT ها (۸ ثانیه) — حتی بدون replica، کوئری‌های تکراری محلی پاسخ می‌گیرند
+let _replicaInfo: { active: boolean; detail: string } = { active: false, detail: "" };
+function withResultCache(db: D1Database): D1Database {
+  const cache = new Map<string, { t: number; v: any }>();
+  const TTL = 8000;
+  const keyOf = (sql: string, args: any[]) => sql + "|" + JSON.stringify(args || []);
+  const fresh = (hit: any) => hit && Date.now() - hit.t < TTL;
+  const cacheable = (sql: string) => /^\s*(select|with)\b/i.test(sql) && !sql.includes("ms_http_jobs") && !sql.includes("ms_ai_jobs");
+  const wrap = (st: any, sql: string, args: any[]): any => ({
+    sql,
+    args,
+    bind(...vs: any[]) { return wrap(st.bind(...vs), sql, vs); },
+    async first(col?: string) {
+      if (!cacheable(sql)) return st.first(col);
+      const k = keyOf(sql, args);
+      const hit = cache.get(k);
+      if (fresh(hit)) return hit!.v;
+      const v = await st.first(col);
+      if (cache.size > 800) cache.clear();
+      cache.set(k, { t: Date.now(), v });
+      return v;
+    },
+    async all() {
+      if (!cacheable(sql)) return st.all();
+      const k = keyOf(sql, args);
+      const hit = cache.get(k);
+      if (fresh(hit)) return hit!.v;
+      const v = await st.all();
+      if (cache.size > 800) cache.clear();
+      cache.set(k, { t: Date.now(), v });
+      return v;
+    },
+    async run() {
+      const v = await st.run();
+      cache.clear();
+      return v;
+    },
+  });
+  return {
+    prepare(sql: string) { return wrap(db.prepare(sql), sql, []); },
+    batch(stmts: any[]) { cache.clear(); return db.batch(stmts); },
+  } as any;
+}
+
+export function tursoDiag(): any {
+  return { replica: _replicaInfo, cache: "on" };
 }
 
 
 // همگام‌سازی replica محلی با سرور اصلی (فقط وقتی replica فعال است کار می‌کند)
-export async function tursoSyncNow(): Promise<void> {
+let _lastSyncAt = 0;
+export async function tursoSyncNow(force?: boolean): Promise<void> {
   try {
     const c: any = cachedClient;
-    if (c && typeof c.sync === "function") await c.sync();
+    if (c && typeof c.sync === "function") {
+      if (!force && Date.now() - _lastSyncAt < 2500) return;
+      _lastSyncAt = Date.now();
+      await c.sync();
+    }
   } catch {}
 }

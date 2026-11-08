@@ -165,7 +165,7 @@ const server = http.createServer(async (req, res) => {
       await one("auto", "auto");
       await one("gemini", "gemini");
       await one("openrouter", "openrouter");
-      if (String(request.url || "").includes("relay=1")) {
+      if (String(req.url || "").includes("relay=1")) {
         const t0 = Date.now();
         try {
           const dbx = getTursoD1FromEnv(process.env);

@@ -1,7 +1,8 @@
 {
-  "updated": "2026-11-07",
-  "note": "ترتیب آدرس‌ها = اولویت اتصال اپ اندروید — دامنه اختصاصی اول",
+  "updated": "2026-11-08",
+  "note": "ترتیب = اولویت؛ گردو (ایران/بدون VPN) اول، Render (بین‌الملل) پشتیبان",
   "endpoints": [
+    "https://smartclass-render-turso.gerdoo.app/school",
     "https://www.azmakan.qd.je/school",
     "https://smartclasstrusu.onrender.com/school"
   ]

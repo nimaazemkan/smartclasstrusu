@@ -253,11 +253,12 @@ export async function handleSetupRequest(
     <div class="card" style="border-color:#10B981;">
       <div style="font-weight:bold;margin-bottom:8px;color:#34D399;">🔌 اتصال دیتابیس Turso — مستقیم از همین صفحه</div>
       <div style="color:#94A3B8;font-size:12.5px;margin-bottom:10px;">دو مقدار TURSO_DATABASE_URL و TURSO_AUTH_TOKEN را این‌جا وارد کنید تا بلافاصله وصل شود — نیازی به پنل میزبان نیست.</div>
-      <input id="tursoUrl" dir="ltr" placeholder="TURSO_DATABASE_URL (شروع با libsql://)" />
-      <input id="tursoToken" dir="ltr" placeholder="TURSO_AUTH_TOKEN (شروع با eyJ)" />
+      <input id="tursoUrl" dir="ltr" oninput="maybeAutoDb()" placeholder="TURSO_DATABASE_URL (شروع با libsql://)" />
+      <input id="tursoToken" dir="ltr" oninput="maybeAutoDb()" placeholder="TURSO_AUTH_TOKEN (شروع با eyJ)" />
       <input id="groqKey" dir="ltr" placeholder="GROQ_API_KEY (اختیاری — شروع با gsk_)" />
-      <input id="admPassDb" type="password" dir="ltr" placeholder="رمز مدیریت پنل (PANEL_PASSWORD)" />
+      <input id="admPassDb" type="password" dir="ltr" oninput="maybeAutoDb()" placeholder="رمز مدیریت پنل (PANEL_PASSWORD)" />
       <button class="btn-green" onclick="connectDb()">💾 ذخیره و اتصال فوری</button>
+      <div id="dbLog" style="display:none;padding:12px;border-radius:12px;white-space:pre-line;font-size:13px;margin-top:10px;"></div>
     </div>` : ""}
     <div class="card">
       <div style="font-weight:bold;margin-bottom:8px;color:#FDE047;">🔐 عملیات راه‌اندازی با یک کلیک</div>
@@ -270,10 +271,26 @@ export async function handleSetupRequest(
   </div>
 
   <script>
+    let dbAutoDone = false;
+    function maybeAutoDb() {
+      if (dbAutoDone) return;
+      try {
+        const u = document.getElementById("tursoUrl").value.trim();
+        const t = document.getElementById("tursoToken").value.trim();
+        const p = (document.getElementById("admPassDb") || {}).value || (document.getElementById("admPass") || {}).value;
+        if (u.indexOf("libsql://") === 0 && t.length > 20 && p) { dbAutoDone = true; connectDb(); }
+      } catch (e) {}
+    }
+    function dbShow(msg, color) {
+      const b1 = document.getElementById("dbLog");
+      if (b1) { b1.style.display = "block"; b1.style.background = color === "red" ? "#7F1D1D" : "#064E3B"; b1.textContent = msg; }
+      const b2 = document.getElementById("logBox");
+      if (b2) { b2.style.display = "block"; b2.style.background = color === "red" ? "#7F1D1D" : "#064E3B"; b2.textContent = msg; }
+    }
     async function connectDb() {
-      const password = document.getElementById("admPassDb").value || document.getElementById("admPass").value;
-      if (!password) { alert("رمز مدیریت پنل را وارد کنید."); return; }
-      const box = document.getElementById("logBox");
+      const password = (document.getElementById("admPassDb") || {}).value || (document.getElementById("admPass") || {}).value;
+      if (!password) { dbShow("رمز مدیریت پنل (Mina1362@) را در فیلد آخر وارد کنید.", "red"); return; }
+      dbShow("⏳ در حال اتصال به دیتابیس...", "gray");
       box.style.display = "block"; box.style.background = "#1E293B";
       box.textContent = "⏳ در حال اتصال به دیتابیس...";
       try {
@@ -289,16 +306,14 @@ export async function handleSetupRequest(
         });
         const data = await res.json();
         if (!res.ok || !data.ok) {
-          box.style.background = "#7F1D1D";
-          box.textContent = "\u274c " + (data.error || "خطا در اتصال");
+          dbShow("\u274c " + (data.error || "خطا در اتصال"), "red");
         } else {
-          box.style.background = "#064E3B";
-          box.textContent = data.message;
+          dbShow(data.message, "green");
+          try { alert(data.message); } catch (e) {}
           setTimeout(() => { location.href = "/school"; }, 1500);
         }
       } catch (e) {
-        box.style.background = "#7F1D1D";
-        box.textContent = "\u274c خطای ارتباط: " + e.message;
+        dbShow("\u274c خطای ارتباط: " + e.message, "red");
       }
     }
     (function () {

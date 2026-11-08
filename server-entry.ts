@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import appHandler from "./api/index";
 import { getTursoD1FromEnv } from "./src/turso-d1";
-import { BOT_TOKEN } from "./src/core";
+import { BOT_TOKEN, aiChatComplete } from "./src/core";
 
 const PORT = Number(process.env.PORT || 3000);
 let cachedPdfJsBuf: Buffer | null = null;
@@ -137,6 +137,33 @@ const server = http.createServer(async (req, res) => {
       } catch (e: any) {
         out.turso = { error: String((e && e.message) || e).slice(0, 80) };
       }
+      res.writeHead(200, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
+      res.end(JSON.stringify(out));
+      return;
+    }
+
+    if (cleanPath === "/api/ai-check") {
+      const out: any = { ts: Date.now() };
+      const one = async (name: string, prov: string) => {
+        const t0 = Date.now();
+        try {
+          let key = "";
+          if (prov === "gemini" || prov === "openrouter") {
+            try {
+              const dbx = getTursoD1FromEnv(process.env);
+              const kr: any = dbx ? await dbx.prepare("SELECT api_key FROM ms_ai_keys WHERE provider = ?").bind(prov).first() : null;
+              key = String((kr && kr.api_key) || "");
+            } catch {}
+          }
+          const r = await aiChatComplete({ GROQ_API_KEY: process.env.GROQ_API_KEY || "" } as any, prov, "پاسخ کوتاه بده.", "1+1 چند می شود؟ فقط عدد بنویس.", key);
+          out[name] = { ms: Date.now() - t0, result: String(r).slice(0, 40) };
+        } catch (e: any) {
+          out[name] = { ms: Date.now() - t0, error: String((e && e.message) || e).slice(0, 120) };
+        }
+      };
+      await one("auto", "auto");
+      await one("gemini", "gemini");
+      await one("openrouter", "openrouter");
       res.writeHead(200, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
       res.end(JSON.stringify(out));
       return;
